@@ -3,11 +3,8 @@ TARGET = light_sensor
 
 CPP=$(CCPREFIX)g++
 
-all: main.o
-	$(CPP) $(CFLAGS) -o $(TARGET) main.o
-
-main.o: main.cpp
-	$(CPP) $(CFLAGS) -c main.cpp
+all:
+	$(CPP) $(CFLAGS) -o $(TARGET) main.cpp
 
 clean:
-	rm *.o
+	rm light_sensor

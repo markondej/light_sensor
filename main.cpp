@@ -56,7 +56,7 @@
 
 #define ACCESS(base, offset) *(volatile uint32_t*)((uint32_t)base + offset)
 #define ACCESS64(base, offset) *(volatile uint64_t*)((uint32_t)base + offset)
-#define GPIO_INIT(bitMask, setAddr, clrAddr, readAddr, fnselAddr, fnselBit, mode) {bitMask, setAddr, clrAddr, readAddr, fnselAddr, fnselBit, GPIO_MODE_UNKNOWN, 2.0d, 1.0d};
+#define GPIO_INIT(bitMask, setAddr, clrAddr, readAddr, fnselAddr, fnselBit) {bitMask, setAddr, clrAddr, readAddr, fnselAddr, fnselBit, GPIO_MODE_UNKNOWN, 20.0, 1.0};
 
 #define SENSOR_SCALE 100000
 #define SENSOR_RESET_TIME 100000
@@ -78,7 +78,7 @@ struct PWM {
     GPIO* gpio;
     double period, width;
     uint64_t startOffset;
-    bool hight;
+    bool high;
 };
 
 class GPIOController
@@ -87,7 +87,7 @@ class GPIOController
         virtual ~GPIOController();
         static GPIOController* getInstance();
         void setMode(uint32_t gpioBitMask, uint8_t mode);
-        void pwm(uint32_t gpioBitMask, double period, double width);
+        void setPwm(uint32_t gpioBitMask, double period, double width);
         void set(uint32_t gpioBitMask, bool high);
         bool get(uint32_t gpioBitMask);
     private:
@@ -186,7 +186,7 @@ void GPIOController::setMode(uint32_t gpioBitMask, uint8_t mode)
             if (mode == GPIO_MODE_PWM) {
                 if (!pwm) {
                     pwm = true;
-                    if (pthread_create(&pwmThread, NULL, &GPIOController::pwmCallback(), NULL)) {
+                    if (pthread_create(&pwmThread, NULL, &GPIOController::pwmCallback, NULL)) {
                         throw exception();
                     }
                 }
@@ -207,7 +207,7 @@ void GPIOController::setMode(uint32_t gpioBitMask, uint8_t mode)
     }
 }
 
-void GPIOController::pwm(uint32_t gpioBitMask, double period, double width)
+void GPIOController::setPwm(uint32_t gpioBitMask, double period, double width)
 {
     for (uint8_t i = 0; i < GPIO_COUNT; i++) {
         GPIO* selected = &gpio[i];
@@ -307,9 +307,13 @@ double getLight() {
 
 int main(int argc, char** argv)
 {
+    GPIOController* gpioController = GPIOController::getInstance();
+    gpioController->setPwm(GPIO_18, 20.0, 0.5);
+    gpioController->setMode(GPIO_18, GPIO_MODE_PWM);
     try {
         while (true) {
             int light = (int)(getLight() * 100.0d);
+            gpioController->setPwm(GPIO_18, 20.0, 0.5 + light / 100.0 * 2.0);
             cout << "LIGHT: " << light << "%" << flush;
             usleep(100000);
             cout << "\rLIGHT:     \r";
