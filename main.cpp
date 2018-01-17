@@ -40,6 +40,8 @@
 #define GPIO_4 0x00000010
 #define GPIO_18 0x00040000
 
+#define BCM2835_PERIPHERALS_BASE 0x20000000
+#define BCM2836_PERIPHERALS_BASE 0x3F000000
 #define GPIO_FSEL0_BASE 0x00200000
 #define GPIO_FSEL1_BASE 0x00200004
 #define GPIO_SET0_BASE 0x0020001C
@@ -129,7 +131,7 @@ GPIOController::GPIOController()
         throw exception();
     }
 
-    peripherals = mmap(NULL, 0x002FFFFF, PROT_READ | PROT_WRITE, MAP_SHARED, memFd, isBcm2835 ? 0x20000000 : 0x3F000000);
+    peripherals = mmap(NULL, 0x002FFFFF, PROT_READ | PROT_WRITE, MAP_SHARED, memFd, isBcm2835 ? BCM2835_PERIPHERALS_BASE : BCM2836_PERIPHERALS_BASE);
     close(memFd);
     if (peripherals == MAP_FAILED) {
         throw exception();
