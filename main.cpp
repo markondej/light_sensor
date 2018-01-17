@@ -175,11 +175,11 @@ bool GPIOController::get(uint32_t gpioBitMask)
 double getLight() {
     uint32_t counter = 0;
     GPIOController* gpioController = GPIOController::getInstance();
-    gpioController->setMode(GPIO_18, 1);
-    gpioController->set(GPIO_18, 0);
+    gpioController->setMode(GPIO_4, 1);
+    gpioController->set(GPIO_4, 0);
     usleep(SENSOR_RESET_TIME);
-    gpioController->setMode(GPIO_18, 0);
-    while ((gpioController->get(GPIO_18) == false) && (counter < SENSOR_SCALE)) {
+    gpioController->setMode(GPIO_4, 0);
+    while ((gpioController->get(GPIO_4) == false) && (counter < SENSOR_SCALE)) {
         asm("nop");
         counter++;
     }
@@ -190,9 +190,10 @@ int main(int argc, char** argv)
 {
     try {
         while (true) {
-            cout << "LIGHT: " << getLight() << flush;
+            int light = (int)(getLight() * 100.0d);
+            cout << "LIGHT: " << light << "%" << flush;
             usleep(100000);
-            cout << "\rLIGHT:         \r";
+            cout << "\rLIGHT:     \r";
         }
     } catch (exception &error) {
         cout << "Error: cannot obtain access to peripherals" << endl;
