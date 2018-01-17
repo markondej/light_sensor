@@ -313,7 +313,7 @@ int main(int argc, char** argv)
     try {
         while (true) {
             int light = (int)(getLight() * 100.0d);
-            gpioController->setPwm(GPIO_18, 20.0, 0.5 + light / 100.0 * 2.0);
+            gpioController->setPwm(GPIO_18, 20.0, (light < 70) ? 2.0 : 0.5);
             cout << "LIGHT: " << light << "%" << flush;
             usleep(100000);
             cout << "\rLIGHT:     \r";
