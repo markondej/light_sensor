@@ -307,10 +307,10 @@ double getLight() {
 
 int main(int argc, char** argv)
 {
-    GPIOController* gpioController = GPIOController::getInstance();
-    gpioController->setPwm(GPIO_18, 20.0, 0.5);
-    gpioController->setMode(GPIO_18, GPIO_MODE_PWM);
     try {
+        GPIOController* gpioController = GPIOController::getInstance();
+        gpioController->setPwm(GPIO_18, 20.0, 0.5);
+        gpioController->setMode(GPIO_18, GPIO_MODE_PWM);
         while (true) {
             int light = (int)(getLight() * 100.0d);
             gpioController->setPwm(GPIO_18, 20.0, (light < 70) ? 2.0 : 0.5);
