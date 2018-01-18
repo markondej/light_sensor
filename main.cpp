@@ -295,7 +295,7 @@ double getLight() {
     uint32_t counter = 0;
     GPIOController* gpioController = GPIOController::getInstance();
     gpioController->setMode(GPIO_4, GPIO_MODE_OUT);
-    gpioController->set(GPIO_4, 0);
+    gpioController->set(GPIO_4, false);
     usleep(SENSOR_RESET_TIME);
     gpioController->setMode(GPIO_4, GPIO_MODE_IN);
     while ((gpioController->get(GPIO_4) == false) && (counter < SENSOR_SCALE)) {
