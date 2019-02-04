@@ -12,7 +12,7 @@ Usage:
 GPIOController *gpio = &GPIOController::getInstance();
 gpio->setPwm(4, 20.0f, 1.0f); // Configure PWM on GPIO4, period = 20ms, pulse width = 1ms
 gpio->setMode(4, GPIO_MODE_PWM); // Turn on PWM on GPIO4 with selected configuration
-gpio->setMode(21, GPIO_MODE_OUT);	// Use GPIO21 as an output
+gpio->setMode(21, GPIO_MODE_OUT); // Use GPIO21 as an output
 gpio->set(21, true); // Set GPIO21 high
 usleep(1000000); // Wait 1s
 gpio->set(21, false); // Set GPIO21 low
