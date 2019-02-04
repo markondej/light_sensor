@@ -196,12 +196,12 @@ GPIOController::GPIOController()
     gpio = new GPIO[GPIO_COUNT];
     for (uint8_t i = 0; i < GPIO_COUNT; i++) {
         gpio[i] = {
-            i + 2,
+            (uint32_t)i + 2,
             (uint32_t *)getPeripheral(GPIO_SET0_OFFSET), 
             (uint32_t *)getPeripheral(GPIO_CLR0_OFFSET), 
             (uint32_t *)getPeripheral(GPIO_LEVEL0_OFFSET),
-            (uint32_t *)getPeripheral(GPIO_FSEL_BASE_OFFSET + ((i + 2) * 3) / 30 * sizeof(uint32_t)), 
-            ((i + 2) * 3) % 30, 
+            (uint32_t *)getPeripheral(GPIO_FSEL_BASE_OFFSET + (((uint32_t)i + 2) * 3) / 30 * sizeof(uint32_t)), 
+            (((uint32_t)i + 2) * 3) % 30, 
             GPIO_MODE_UNKNOWN, 
             20.0, 
             1.0
@@ -428,7 +428,7 @@ void *GPIOController::pwmCallback(void *params)
         bitMask[i] = 0x01 << pwmInfo[i].gpio->number;
     }
 
-    for (uint32_t i = 0; i < 8; i++) {
+    for (uint8_t i = 0; i < 8; i++) {
         dmaCb[cbIndex].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
         dmaCb[cbIndex].srcAddress = getMemoryAddress(pwmData);
         dmaCb[cbIndex].dstAddress = getPeripheralAddress(&pwm->fifoIn);
