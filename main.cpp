@@ -1,5 +1,5 @@
 /*
-    rpi_cpp_gpio_controll - Raspberry Pi GPIO control library for C++
+    rpi_cpp_gpio_control - Raspberry Pi GPIO control library for C++
 
     Copyright (c) 2019, Marcin Kondej
     All rights reserved.
