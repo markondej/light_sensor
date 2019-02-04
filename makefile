@@ -1,10 +1,14 @@
-CFLAGS += -Wall -fexceptions -pthread -lm -O3 -fpermissive -fno-strict-aliasing
-TARGET = light_sensor
+EXECUTABLE = light_sensor
+FLAGS = -Wall -O3
 
-CPP=$(CCPREFIX)g++
+all: main.o mailbox.o
+	g++ -L/opt/vc/lib -lpthread -lbcm_host -o $(EXECUTABLE) main.o mailbox.o
 
-all:
-	$(CPP) $(CFLAGS) -o $(TARGET) main.cpp
+mailbox.o: mailbox.c mailbox.h
+	g++ $(FLAGS) -c mailbox.c
+	
+main.o: main.cpp
+	g++ $(FLAGS) -I/opt/vc/include -c main.cpp
 
 clean:
-	rm light_sensor
+	rm *.o
