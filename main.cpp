@@ -575,6 +575,9 @@ void *GPIOController::pwmCallback(void *params)
         usleep(1);
     }
 
+    dma->ctlStatus = (0x01 << 31);
+    pwm->ctl = 0x00;
+
     delete [] pwmInfo;
 
     freeMemory();
