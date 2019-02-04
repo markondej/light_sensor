@@ -31,9 +31,10 @@
     WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <unistd.h>
 #include "mailbox.h"
 #include <bcm_host.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <iostream>
@@ -67,13 +68,12 @@
 #define GPIO_PULL_UP 0x02
 #define GPIO_PULL_DOWN 0x01
 
-#define SENSOR_SCALE 100000
-#define SENSOR_RESET_TIME 100000
+#define SERVICE_PORT 5000
+#define SERVICE_MAX_CONNECTIONS 10
+#define RW_BUFFER_SIZE 1024
 
-using std::string;
 using std::exception;
 using std::cout;
-using std::flush;
 using std::endl;
 
 struct ClockRegisters {
@@ -574,18 +574,63 @@ int main(int argc, char** argv)
     signal(SIGINT, sigIntHandler);
     signal(SIGTSTP, sigIntHandler);
     try {
+        int listenFd, connFd;
+        struct sockaddr_in servAddr; 
+
+        char readBuff[RW_BUFFER_SIZE];
+        char sendBuff[RW_BUFFER_SIZE];
+
         GPIOController *gpio = &GPIOController::getInstance();
-        gpio->setPwm(4, 20.0f, 1.0f); // Configure PWM on GPIO4, period = 20ms, pulse width = 1ms
-        gpio->setMode(4, GPIO_MODE_PWM); // Turn on PWM on GPIO4 with selected configuration
-        gpio->setMode(21, GPIO_MODE_OUT); // Use GPIO21 as an output
-        gpio->set(21, true); // Set GPIO21 high
-        usleep(1000000); // Wait 1s
-        gpio->set(21, false); // Set GPIO21 low
-        gpio->setPwm(4, 20.0f, 1.5f); // Change previously selected PWM pulse width to 1.5s
-        usleep(1000000); // Wait 1s
-        gpio->setPullUD(21, GPIO_PULL_UP); // Turn on pull-up on GPIO21
-        gpio->setMode(21, GPIO_MODE_IN); // Use GPIO21 as an input
-        cout << "INPUT: " << (gpio->get(21) ? "HIGH" : "LOW") << endl; // Print input level
+
+        gpio->setPwm(4, 20.0f, 1.0f);
+        gpio->setMode(4, GPIO_MODE_PWM);
+
+        if ((listenFd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) == -1) {
+            throw exception();
+        }
+
+        memset(&servAddr, 0, sizeof(servAddr));
+        servAddr.sin_family = AF_INET;
+        servAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        servAddr.sin_port = htons(SERVICE_PORT); 
+
+        if (bind(listenFd, (struct sockaddr*)&servAddr, sizeof(servAddr)) == -1) {
+            close(listenFd);
+            throw exception();
+        }
+
+        if (listen(listenFd, SERVICE_MAX_CONNECTIONS) == -1) {
+            close(listenFd);
+            throw exception();
+        }
+
+        while(!stop) {
+            if ((connFd = accept(listenFd, (struct sockaddr*)NULL, NULL)) == -1) {
+                usleep(100);
+                continue;
+            }
+            memset(readBuff, 0, RW_BUFFER_SIZE);
+            memset(sendBuff, 0, RW_BUFFER_SIZE);
+            read(connFd, readBuff, RW_BUFFER_SIZE);
+            if (strcmp(readBuff, "1\r\n") == 0) {
+                sprintf(sendBuff, "OK:1\r\n");
+                gpio->setPwm(4, 20.0f, 2.0f);
+                cout << "Level set: 1" << endl;
+                usleep(100);
+            } else if (strcmp(readBuff, "0\r\n") == 0) {
+                sprintf(sendBuff, "OK:0\r\n");
+                gpio->setPwm(4, 20.0f, 1.0f);
+                cout << "Level set: 0" << endl;
+                usleep(100);
+            } else {
+                sprintf(sendBuff, "ERROR:VALUE UNKNOWN\r\n");
+                cout << "Received unknown command" << endl;
+            }
+            write(connFd, sendBuff, strlen(sendBuff));
+            close(connFd);
+        }
+
+        close(listenFd);
     } catch (exception &error) {
         cout << "An error occurred, check your privileges" << endl;
         return 1;
