@@ -4,7 +4,7 @@
     Copyright (c) 2019, Marcin Kondej
     All rights reserved.
 
-    See https://github.com/markondej/rpi_cpp_gpio_controll
+    See https://github.com/markondej/rpi_cpp_gpio_control
 
     Redistribution and use in source and binary forms, with or without modification, are
     permitted provided that the following conditions are met:
