@@ -431,58 +431,58 @@ void *GPIOController::pwmCallback(void *params)
         dmaCb[i].stride = 0;
     }
 
-    uint32_t cbIndex = 0;
-    dmaCb[cbIndex].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
-    dmaCb[cbIndex].srcAddress = getMemoryAddress(pwmData);
-    dmaCb[cbIndex].dstAddress = getPeripheralAddress(&pwm->fifoIn);
-    dmaCb[cbIndex].nextCbAddress = getMemoryAddress(&dmaCb[cbIndex + 1]);
-    dmaCb[cbIndex].transferLen = 8 * PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
-    cbIndex++;
-    uint32_t lastComplete = cbIndex;
+    uint32_t cbOffset = 0;
+    dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
+    dmaCb[cbOffset].srcAddress = getMemoryAddress(pwmData);
+    dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
+    dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+    dmaCb[cbOffset].transferLen = 8 * PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
+    cbOffset++;
+    uint32_t lastComplete = cbOffset;
 
     bool cbAvailable;
     uint64_t offset = 0;
-    while (cbIndex < DMA_BUFFER_SIZE) {
+    while (cbOffset < DMA_BUFFER_SIZE) {
         cbAvailable = true;
         for (uint8_t i = 0; i < GPIO_COUNT; i++) {
             if ((pwmInfo[i].gpio->mode == GPIO_MODE_PWM) && (offset == pwmInfo[i].start)) {
                 pwmInfo[i].enabled = true;
                 pwmInfo[i].start = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmPeriod / 1000.0f;
                 pwmInfo[i].end = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmWidth / 1000.0f;
-                dmaCb[cbIndex].transferInfo = (0x01 << 26) | (0x01 << 3);
-                dmaCb[cbIndex].srcAddress = getMemoryAddress(&bitMask[i]);
-                dmaCb[cbIndex].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->set);
-                dmaCb[cbIndex].nextCbAddress = getMemoryAddress(&dmaCb[cbIndex + 1]);
-                dmaCb[cbIndex].transferLen = sizeof(uint32_t);
-                cbIndex++;
+                dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
+                dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
+                dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->set);
+                dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                dmaCb[cbOffset].transferLen = sizeof(uint32_t);
+                cbOffset++;
             } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled) {
-                dmaCb[cbIndex].transferInfo = (0x01 << 26) | (0x01 << 3);
-                dmaCb[cbIndex].srcAddress = getMemoryAddress(&bitMask[i]);
-                dmaCb[cbIndex].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->clr);
-                dmaCb[cbIndex].nextCbAddress = getMemoryAddress(&dmaCb[cbIndex + 1]);
-                dmaCb[cbIndex].transferLen = sizeof(uint32_t);
-                cbIndex++;
+                dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
+                dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
+                dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->clr);
+                dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                dmaCb[cbOffset].transferLen = sizeof(uint32_t);
+                cbOffset++;
             }
-            if (cbIndex == DMA_BUFFER_SIZE) {
+            if (cbOffset == DMA_BUFFER_SIZE) {
                 cbAvailable = false;
                 break;
             }
         }
         if (cbAvailable) {
-            dmaCb[cbIndex].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
-            dmaCb[cbIndex].srcAddress = getMemoryAddress(pwmData);
-            dmaCb[cbIndex].dstAddress = getPeripheralAddress(&pwm->fifoIn);
-            dmaCb[cbIndex].nextCbAddress = getMemoryAddress(&dmaCb[cbIndex + 1]);
-            dmaCb[cbIndex].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
-            cbIndex++;
+            dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
+            dmaCb[cbOffset].srcAddress = getMemoryAddress(pwmData);
+            dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
+            dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+            dmaCb[cbOffset].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
+            cbOffset++;
         } else {
-            cbIndex = lastComplete;
+            cbOffset = lastComplete;
             break;
         }
-        lastComplete = cbIndex;
+        lastComplete = cbOffset;
         offset++;
     }
-    dmaCb[cbIndex - 1].nextCbAddress = getMemoryAddress(dmaCb);
+    dmaCb[cbOffset - 1].nextCbAddress = getMemoryAddress(dmaCb);
 
     *pwmData = 0x00000000;
 
@@ -496,59 +496,59 @@ void *GPIOController::pwmCallback(void *params)
     usleep(1000);
 
     while (pwmEnabled) {
-        cbIndex = 0;
-        while (cbIndex < DMA_BUFFER_SIZE) {
+        cbOffset = 0;
+        while (cbOffset < DMA_BUFFER_SIZE) {
             cbAvailable = true;
             for (uint8_t i = 0; i < GPIO_COUNT; i++) {
-                while (cbIndex == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
+                while (cbOffset == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
                     usleep(1);
                 }
                 if ((pwmInfo[i].gpio->mode == GPIO_MODE_PWM) && ((offset == pwmInfo[i].start) || !pwmInfo[i].enabled)) {
                     pwmInfo[i].enabled = true;
                     pwmInfo[i].start = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmPeriod / 1000.0f;
                     pwmInfo[i].end = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmWidth / 1000.0f;
-                    dmaCb[cbIndex].transferInfo = (0x01 << 26) | (0x01 << 3);
-                    dmaCb[cbIndex].srcAddress = getMemoryAddress(&bitMask[i]);
-                    dmaCb[cbIndex].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->set);
-                    dmaCb[cbIndex].nextCbAddress = getMemoryAddress(&dmaCb[cbIndex + 1]);
-                    dmaCb[cbIndex].transferLen = sizeof(uint32_t);
-                    cbIndex++;
+                    dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
+                    dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
+                    dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->set);
+                    dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                    dmaCb[cbOffset].transferLen = sizeof(uint32_t);
+                    cbOffset++;
                 } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled) {
-                    dmaCb[cbIndex].transferInfo = (0x01 << 26) | (0x01 << 3);
-                    dmaCb[cbIndex].srcAddress = getMemoryAddress(&bitMask[i]);
-                    dmaCb[cbIndex].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->clr);
-                    dmaCb[cbIndex].nextCbAddress = getMemoryAddress(&dmaCb[cbIndex + 1]);
-                    dmaCb[cbIndex].transferLen = sizeof(uint32_t);
-                    cbIndex++;
+                    dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
+                    dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
+                    dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->clr);
+                    dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                    dmaCb[cbOffset].transferLen = sizeof(uint32_t);
+                    cbOffset++;
                 } else if ((pwmInfo[i].gpio->mode != GPIO_MODE_PWM) && (offset == pwmInfo[i].start) && pwmInfo[i].enabled) {
                     pwmInfo[i].enabled = false;
                 }
-                if (cbIndex == DMA_BUFFER_SIZE) {
+                if (cbOffset == DMA_BUFFER_SIZE) {
                     cbAvailable = false;
                     break;
                 }
             }
             if (cbAvailable) {
-                while (cbIndex == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
+                while (cbOffset == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
                     usleep(1);
                 }
-                dmaCb[cbIndex].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
-                dmaCb[cbIndex].srcAddress = getMemoryAddress(pwmData);
-                dmaCb[cbIndex].dstAddress = getPeripheralAddress(&pwm->fifoIn);
-                dmaCb[cbIndex].nextCbAddress = getMemoryAddress(&dmaCb[cbIndex + 1]);
-                dmaCb[cbIndex].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
-                cbIndex++;
+                dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
+                dmaCb[cbOffset].srcAddress = getMemoryAddress(pwmData);
+                dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
+                dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                dmaCb[cbOffset].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
+                cbOffset++;
             } else {
-                cbIndex = lastComplete;
+                cbOffset = lastComplete;
                 break;
             }
-            lastComplete = cbIndex;
+            lastComplete = cbOffset;
             offset++;
         }
-        dmaCb[cbIndex - 1].nextCbAddress = getMemoryAddress(dmaCb);
+        dmaCb[cbOffset - 1].nextCbAddress = getMemoryAddress(dmaCb);
     }
 
-    dmaCb[cbIndex - 1].nextCbAddress = 0x00000000;    
+    dmaCb[cbOffset - 1].nextCbAddress = 0x00000000;    
     while (dma->cbAddress != 0x00000000) {
         usleep(1);
     }
