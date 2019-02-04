@@ -1,4 +1,4 @@
-EXECUTABLE = light_sensor
+EXECUTABLE = gpio_control
 FLAGS = -Wall -O3
 
 all: main.o mailbox.o

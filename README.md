@@ -1,4 +1,4 @@
-# rpi_cpp_gpio_controll
+# rpi_cpp_gpio_control
 Raspberry Pi GPIO control library for C++
 
 Features:
