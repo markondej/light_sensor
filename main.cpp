@@ -509,14 +509,13 @@ void *GPIOController::pwmCallback(void *params)
     }
     dmaCb[cbIndex - 1].nextCbAddress = getMemoryAddress(dmaCb);
 
-*pwmData = 0x00000000;
+    *pwmData = 0x00000000;
 
     volatile DMARegisters *dma = (DMARegisters *)getPeripheral((dmaChannel < 15) ? DMA0_BASE_OFFSET + dmaChannel * 0x100 : DMA15_BASE_OFFSET);
     dma->ctlStatus = (0x01 << 31);
     usleep(1000);
     dma->ctlStatus = (0x01 << 2) | (0x01 << 1);
     dma->cbAddress = getMemoryAddress(dmaCb);
-    dma->debug = (0x01 << 2) | (0x01 << 1) | 0x01;
     dma->ctlStatus = (0xFF << 16) | 0x01;
 
     usleep(1000);
