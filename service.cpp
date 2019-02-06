@@ -498,7 +498,7 @@ void *GPIOController::pwmCallback(void *params)
             cbAvailable = true;
             for (uint8_t i = 0; i < GPIO_COUNT; i++) {
                 while (cbOffset == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
-                    usleep(1);
+                    usleep(1000);
                 }
                 if ((pwmInfo[i].gpio->mode == GPIO_MODE_PWM) && ((offset == pwmInfo[i].start) || !pwmInfo[i].enabled)) {
                     pwmInfo[i].enabled = true;
@@ -527,7 +527,7 @@ void *GPIOController::pwmCallback(void *params)
             }
             if (cbAvailable) {
                 while (cbOffset == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
-                    usleep(1);
+                    usleep(1000);
                 }
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
                 dmaCb[cbOffset].srcAddress = getMemoryAddress(pwmData);
@@ -603,7 +603,7 @@ int main(int argc, char** argv)
 
         while(!stop) {
             if ((connFd = accept(listenFd, (struct sockaddr*)NULL, NULL)) == -1) {
-                usleep(100);
+                usleep(1000);
                 continue;
             }
             memset(readBuff, 0, sizeof(readBuff));
@@ -613,12 +613,12 @@ int main(int argc, char** argv)
                 sprintf(sendBuff, "OK:1\r\n");
                 gpio->setPwm(4, 20.0f, 2.0f);
                 cout << "Level set: 1" << endl;
-                usleep(100);
+                usleep(1000);
             } else if (strcmp(readBuff, "0\r\n") == 0) {
                 sprintf(sendBuff, "OK:0\r\n");
                 gpio->setPwm(4, 20.0f, 1.0f);
                 cout << "Level set: 0" << endl;
-                usleep(100);
+                usleep(1000);
             } else {
                 sprintf(sendBuff, "ERROR:VALUE UNKNOWN\r\n");
                 cout << "Received unknown command" << endl;

@@ -11,7 +11,7 @@ Then start service with "sudo ./gpio_service" command in terminal on Raspberry P
 
 ![PuTTY configuration](images/putty_conf.png)
 
-Servo controll will be possible by typing either "1" or "0" in PuTTY's terminal.
+Servo control will be possible by typing either "1" or "0" in PuTTY terminal.
 
 Features:
 * works directly on peripherals, no additional drivers needed
