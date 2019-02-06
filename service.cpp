@@ -1,5 +1,5 @@
 /*
-    rpi_gpio_service - Raspberry Pi GPIO control library for C++
+    rpi_gpio_service - Simple Raspberry Pi GPIO control service written in C++
 
     Copyright (c) 2019, Marcin Kondej
     All rights reserved.
