@@ -1,14 +1,14 @@
-EXECUTABLE = gpio_control
+EXECUTABLE = gpio_service
 FLAGS = -Wall -O3
 
-all: main.o mailbox.o
-	g++ -L/opt/vc/lib -lpthread -lbcm_host -o $(EXECUTABLE) main.o mailbox.o
+all: service.o mailbox.o
+	g++ -L/opt/vc/lib -lpthread -lbcm_host -o $(EXECUTABLE) service.o mailbox.o
 
 mailbox.o: mailbox.c mailbox.h
 	g++ $(FLAGS) -c mailbox.c
 	
-main.o: main.cpp
-	g++ $(FLAGS) -I/opt/vc/include -c main.cpp
+service.o: service.cpp
+	g++ $(FLAGS) -I/opt/vc/include -c service.cpp
 
 clean:
 	rm *.o

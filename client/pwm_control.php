@@ -1,12 +1,12 @@
 <?php
 
 /*
-    rpi_cpp_gpio_control - Raspberry Pi GPIO control library for C++
+    rpi_gpio_service - Raspberry Pi GPIO control library for C++
 
     Copyright (c) 2019, Marcin Kondej
     All rights reserved.
 
-    See https://github.com/markondej/rpi_cpp_gpio_control
+    See https://github.com/markondej/rpi_gpio_service
 
     Redistribution and use in source and binary forms, with or without modification, are
     permitted provided that the following conditions are met:
@@ -33,8 +33,11 @@
     WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-define('PWM_SERVICE_ADDRESS', '192.168.43.92');
+define('PWM_SERVICE_ADDRESS', '192.168.1.5');
 define('PWM_SERVICE_PORT', 5000);
+define('PWM_SERVICE_TIMEOUT', 60);
+
+define('RW_BUFFER_SIZE', 1024);
 
 class PWMController {
     private static function parseResponse($response) {
@@ -52,7 +55,7 @@ class PWMController {
     }
 
     private static function send($command) {
-        $socketFd = @fsockopen(PWM_SERVICE_ADDRESS, PWM_SERVICE_PORT, $errNo, $errStr, 60);
+        $socketFd = @fsockopen(PWM_SERVICE_ADDRESS, PWM_SERVICE_PORT, $errNo, $errStr, PWM_SERVICE_TIMEOUT);
         if (!$socketFd) {
             throw new Exception("Could not connect to host!");
         }
@@ -61,7 +64,7 @@ class PWMController {
         }
         $response = null;
         while (!feof($socketFd)) {
-            $read = fread($socketFd, 1024);
+            $read = fread($socketFd, RW_BUFFER_SIZE);
             if ($read === false) {
                 throw new Exception("Communication error occured!");
             }

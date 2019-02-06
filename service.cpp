@@ -1,10 +1,10 @@
 /*
-    rpi_cpp_gpio_control - Raspberry Pi GPIO control library for C++
+    rpi_gpio_service - Raspberry Pi GPIO control library for C++
 
     Copyright (c) 2019, Marcin Kondej
     All rights reserved.
 
-    See https://github.com/markondej/rpi_cpp_gpio_control
+    See https://github.com/markondej/rpi_gpio_service
 
     Redistribution and use in source and binary forms, with or without modification, are
     permitted provided that the following conditions are met:
@@ -53,6 +53,7 @@
 
 #define BCM2837_MEM_FLAG 0x04
 #define BCM2835_MEM_FLAG 0x0C
+
 #define PWM_CHANNEL_RANGE 32
 #define DMA_BUFFER_SIZE 1024
 #define DMA_FREQUENCY 100000
@@ -397,7 +398,7 @@ void *GPIOController::pwmCallback(void *params)
     }
 
     PWM *pwmInfo = new PWM[GPIO_COUNT];
-    memset(pwmInfo, 0, sizeof(pwmInfo));
+    memset(pwmInfo, 0, sizeof(PWM) * GPIO_COUNT);
     for (uint8_t i = 0; i < GPIO_COUNT; i++) {
         pwmInfo[i].gpio = &gpio[i];
     }
@@ -427,7 +428,7 @@ void *GPIOController::pwmCallback(void *params)
     }
 
     uint32_t cbOffset = 0;
-    memset(dmaCb, 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
+    memset((void *)dmaCb, 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
     dmaCb[cbOffset].srcAddress = getMemoryAddress(pwmData);
     dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
@@ -574,7 +575,7 @@ int main(int argc, char** argv)
         struct sockaddr_in servAddr;
 
         char readBuff[RW_BUFFER_SIZE];
-        char RW_BUFFER_SIZE];
+        char sendBuff[RW_BUFFER_SIZE];
 
         GPIOController *gpio = &GPIOController::getInstance();
 
