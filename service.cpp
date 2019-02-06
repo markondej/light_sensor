@@ -69,6 +69,33 @@
 #define GPIO_PULL_UP 0x02
 #define GPIO_PULL_DOWN 0x01
 
+#define GPIO2 2
+#define GPIO3 3
+#define GPIO4 4
+#define GPIO5 5
+#define GPIO6 6
+#define GPIO7 7
+#define GPIO8 8
+#define GPIO9 9
+#define GPIO10 10
+#define GPIO11 11
+#define GPIO12 12
+#define GPIO13 13
+#define GPIO14 14
+#define GPIO15 15
+#define GPIO16 16
+#define GPIO17 17
+#define GPIO18 18
+#define GPIO19 19
+#define GPIO20 20
+#define GPIO21 21
+#define GPIO22 22
+#define GPIO23 23
+#define GPIO24 24
+#define GPIO25 25
+#define GPIO26 26
+#define GPIO27 27
+
 #define SERVICE_PORT 5000
 #define SERVICE_MAX_CONNECTIONS 10
 #define RW_BUFFER_SIZE 1024
@@ -126,7 +153,7 @@ struct DMARegisters {
 
 struct GPIO {
     uint8_t number;
-    volatile uint32_t *set, *clr, *read, *fnsel;
+    volatile uint32_t *fnselRegister;
     uint32_t fnselBit;
     uint8_t mode;
     double pwmPeriod, pwmWidth;
@@ -145,7 +172,7 @@ class GPIOController
         static GPIOController &getInstance();
         static void setDmaChannel(uint8_t dmaChannel);
         void setMode(uint8_t gpioNo, uint8_t mode);
-        void setPullUD(uint8_t gpioNo, uint32_t type);
+        void setPullUd(uint8_t gpioNo, uint32_t type);
         void setPwm(uint8_t gpioNo, double period, double width);
         void set(uint8_t gpioNo, bool high);
         bool get(uint8_t gpioNo);
@@ -165,6 +192,9 @@ class GPIOController
         static bool pwmEnabled;
         static uint8_t dmaChannel;
         static uint32_t memSize, memAddress, memHandle;
+        static volatile uint32_t *setRegister, *clrRegister;
+        volatile uint32_t *levelRegister;
+        volatile GPIOPullUpDownRegisters *pud;
         static void *memAllocated;
         static int mBoxFd;
 
@@ -178,6 +208,8 @@ uint8_t GPIOController::dmaChannel = 0;
 uint32_t GPIOController::memSize = 0;
 uint32_t GPIOController::memAddress = 0x00000000;
 uint32_t GPIOController::memHandle = 0;
+volatile uint32_t *GPIOController::setRegister = NULL;
+volatile uint32_t *GPIOController::clrRegister = NULL;
 void *GPIOController::memAllocated = NULL;
 int GPIOController::mBoxFd = 0;
 
@@ -194,13 +226,15 @@ GPIOController::GPIOController()
         throw exception();
     }
 
+    setRegister = (uint32_t *)getPeripheral(GPIO_SET0_OFFSET);
+    clrRegister = (uint32_t *)getPeripheral(GPIO_CLR0_OFFSET);
+    levelRegister = (uint32_t *)getPeripheral(GPIO_LEVEL0_OFFSET);
+    pud = (GPIOPullUpDownRegisters *)getPeripheral(GPIO_PUDCTL_OFFSET);
+
     gpio = new GPIO[GPIO_COUNT];
     for (uint8_t i = 0; i < GPIO_COUNT; i++) {
         gpio[i] = {
             (uint8_t)(i + 2),
-            (uint32_t *)getPeripheral(GPIO_SET0_OFFSET),
-            (uint32_t *)getPeripheral(GPIO_CLR0_OFFSET),
-            (uint32_t *)getPeripheral(GPIO_LEVEL0_OFFSET),
             (uint32_t *)getPeripheral(GPIO_FSEL_BASE_OFFSET + ((uint32_t)(i + 2) * 3) / 30 * sizeof(uint32_t)),
             ((uint32_t)(i + 2) * 3) % 30,
             GPIO_MODE_UNKNOWN,
@@ -297,7 +331,8 @@ void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
                 default:
                     throw exception();
             }
-            *selected->fnsel = (*selected->fnsel & ((0xFFFFFFF8 << selected->fnselBit) | (0xFFFFFFFF >> (32 - selected->fnselBit)))) | (func << selected->fnselBit);
+            uint32_t fnsel = *selected->fnselRegister & ((0xFFFFFFF8 << selected->fnselBit) | (0xFFFFFFFF >> (32 - selected->fnselBit)));
+            *selected->fnselRegister = fnsel | (func << selected->fnselBit);
             if (mode == GPIO_MODE_PWM) {
                 if (!pwmEnabled) {
                     pwmEnabled = true;
@@ -322,25 +357,16 @@ void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
     }
 }
 
-void GPIOController::setPullUD(uint8_t gpioNo, uint32_t type) {
+void GPIOController::setPullUd(uint8_t gpioNo, uint32_t type) {
     for (uint8_t i = 0; i < GPIO_COUNT; i++) {
         GPIO *selected = &gpio[i];
         if (selected->number == gpioNo) {
-            volatile GPIOPullUpDownRegisters *pud = (GPIOPullUpDownRegisters *)getPeripheral(GPIO_PUDCTL_OFFSET);
             pud->ctl = type;
-            usleep(10);
-            if (selected->number < 32) {
-                pud->clock0 = 0x01 << selected->number;
-            } else {
-                pud->clock1 = 0x01 << (selected->number - 31);
-            }
-            usleep(10);
-            pud->ctl = 0x00;
-            if (selected->number < 32) {
-                pud->clock0 = 0x00000000;
-            } else {
-                pud->clock1 = 0x00000000;
-            }
+            usleep(100);
+            pud->clock0 = 0x01 << selected->number;
+            usleep(100);
+            pud->ctl = 0x00000000;
+            pud->clock0 = 0x00000000;
             break;
         }
     }
@@ -366,11 +392,8 @@ void GPIOController::set(uint8_t gpioNo, bool high)
         GPIO *selected = &gpio[i];
         if (selected->number == gpioNo) {
             if (selected->mode != GPIO_MODE_PWM) {
-                if (high) {
-                    *selected->set = 0x01 << selected->number;
-                } else {
-                    *selected->clr = 0x01 << selected->number;
-                }
+                volatile uint32_t *regist = high ? setRegister : clrRegister;
+                *regist = 0x01 << selected->number;
             }
             break;
         }
@@ -383,7 +406,7 @@ bool GPIOController::get(uint8_t gpioNo)
         GPIO *selected = &gpio[i];
         if (selected->number == gpioNo) {
             if (selected->mode != GPIO_MODE_PWM) {
-                return (bool)(*selected->read & (0x01 << selected->number));
+                return (bool)(*levelRegister & (0x01 << selected->number));
             }
             break;
         }
@@ -393,7 +416,7 @@ bool GPIOController::get(uint8_t gpioNo)
 
 void *GPIOController::pwmCallback(void *params)
 {
-    if (!allocateMemory(DMA_BUFFER_SIZE * sizeof(DMAControllBlock) + (GPIO_COUNT + 1) * sizeof(uint32_t))) {
+    if (!allocateMemory(DMA_BUFFER_SIZE * sizeof(DMAControllBlock) + DMA_BUFFER_SIZE * sizeof(uint32_t))) {
         return NULL;
     }
 
@@ -421,53 +444,51 @@ void *GPIOController::pwmCallback(void *params)
 
     volatile DMAControllBlock *dmaCb = (DMAControllBlock *)memAllocated;
     volatile uint32_t *bitMask = (uint32_t *)((uint32_t)dmaCb + DMA_BUFFER_SIZE * sizeof(DMAControllBlock));
-    volatile uint32_t *pwmData = (uint32_t *)((uint32_t)bitMask + GPIO_COUNT * sizeof(uint32_t));
-
-    for (uint8_t i = 0; i < GPIO_COUNT; i++) {
-        bitMask[i] = 0x01 << pwmInfo[i].gpio->number;
-    }
 
     uint32_t cbOffset = 0;
     memset((void *)dmaCb, 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
+    memset((void *)bitMask, 0, sizeof(uint32_t) * DMA_BUFFER_SIZE);
     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
-    dmaCb[cbOffset].srcAddress = getMemoryAddress(pwmData);
+    dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
     dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
     dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
     dmaCb[cbOffset].transferLen = 8 * PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
     cbOffset++;
-    uint32_t lastComplete = cbOffset;
 
     bool cbAvailable;
     uint64_t offset = 0;
+    uint32_t bitMaskSetClr[2], lastComplete = cbOffset;
     while (cbOffset < DMA_BUFFER_SIZE) {
-        cbAvailable = true;
+        memset(bitMaskSetClr, 0, sizeof(uint32_t) * 2);
         for (uint8_t i = 0; i < GPIO_COUNT; i++) {
             if ((pwmInfo[i].gpio->mode == GPIO_MODE_PWM) && (offset == pwmInfo[i].start)) {
                 pwmInfo[i].enabled = true;
                 pwmInfo[i].start = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmPeriod / 1000.0f;
                 pwmInfo[i].end = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmWidth / 1000.0f;
-                dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
-                dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
-                dmaCb[cbOffset].dstAddress = getPeripheralAddress((pwmInfo[i].end != offset) ? pwmInfo[i].gpio->set : pwmInfo[i].gpio->clr);
-                dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
-                dmaCb[cbOffset].transferLen = sizeof(uint32_t);
-                cbOffset++;
+                bitMaskSetClr[(pwmInfo[i].end != offset) ? 1 : 0] |= 0x01 << pwmInfo[i].gpio->number;
             } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled && (pwmInfo[i].end != pwmInfo[i].start)) {
+                bitMaskSetClr[0] |= 0x01 << pwmInfo[i].gpio->number;
+            }
+        }
+        cbAvailable = true;
+        for (uint8_t i = 0; i < 2; i++) {
+            if (bitMaskSetClr[i]) {
+                bitMask[cbOffset] = bitMaskSetClr[i];
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
-                dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
-                dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->clr);
+                dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
+                dmaCb[cbOffset].dstAddress = getPeripheralAddress((i > 0) ? setRegister : clrRegister);
                 dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
                 dmaCb[cbOffset].transferLen = sizeof(uint32_t);
                 cbOffset++;
-            }
-            if (cbOffset == DMA_BUFFER_SIZE) {
-                cbAvailable = false;
-                break;
+                if (cbOffset == DMA_BUFFER_SIZE) {
+                    cbAvailable = false;
+                    break;
+                }
             }
         }
         if (cbAvailable) {
             dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
-            dmaCb[cbOffset].srcAddress = getMemoryAddress(pwmData);
+            dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
             dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
             dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
             dmaCb[cbOffset].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
@@ -481,8 +502,6 @@ void *GPIOController::pwmCallback(void *params)
     }
     dmaCb[cbOffset - 1].nextCbAddress = getMemoryAddress(dmaCb);
 
-    *pwmData = 0x00000000;
-
     volatile DMARegisters *dma = (DMARegisters *)getPeripheral((dmaChannel < 15) ? DMA0_BASE_OFFSET + dmaChannel * 0x100 : DMA15_BASE_OFFSET);
     dma->ctlStatus = (0x01 << 31);
     usleep(1000);
@@ -490,47 +509,50 @@ void *GPIOController::pwmCallback(void *params)
     dma->cbAddress = getMemoryAddress(dmaCb);
     dma->ctlStatus = (0xFF << 16) | 0x01;
 
-    usleep(1000);
+    usleep(DMA_BUFFER_SIZE * 250000 / DMA_FREQUENCY);
 
     while (pwmEnabled) {
         cbOffset = 0;
         while (cbOffset < DMA_BUFFER_SIZE) {
-            cbAvailable = true;
+            memset(bitMaskSetClr, 0, sizeof(uint32_t) * 2);
             for (uint8_t i = 0; i < GPIO_COUNT; i++) {
-                while (cbOffset == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
-                    usleep(1000);
-                }
                 if ((pwmInfo[i].gpio->mode == GPIO_MODE_PWM) && ((offset == pwmInfo[i].start) || !pwmInfo[i].enabled)) {
                     pwmInfo[i].enabled = true;
                     pwmInfo[i].start = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmPeriod / 1000.0f;
                     pwmInfo[i].end = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmWidth / 1000.0f;
-                    dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
-                    dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
-                    dmaCb[cbOffset].dstAddress = getPeripheralAddress((pwmInfo[i].end != offset) ? pwmInfo[i].gpio->set : pwmInfo[i].gpio->clr);
-                    dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
-                    dmaCb[cbOffset].transferLen = sizeof(uint32_t);
-                    cbOffset++;
+                    bitMaskSetClr[(pwmInfo[i].end != offset) ? 1 : 0] |= 0x01 << pwmInfo[i].gpio->number;
                 } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled && (pwmInfo[i].end != pwmInfo[i].start)) {
-                    dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
-                    dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
-                    dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->clr);
-                    dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
-                    dmaCb[cbOffset].transferLen = sizeof(uint32_t);
-                    cbOffset++;
+                    bitMaskSetClr[0] |= 0x01 << pwmInfo[i].gpio->number;
                 } else if ((pwmInfo[i].gpio->mode != GPIO_MODE_PWM) && (offset == pwmInfo[i].start) && pwmInfo[i].enabled) {
                     pwmInfo[i].enabled = false;
                 }
-                if (cbOffset == DMA_BUFFER_SIZE) {
-                    cbAvailable = false;
-                    break;
+            }
+            cbAvailable = true;
+            for (uint8_t i = 0; i < 2; i++) {
+                if (bitMaskSetClr[i]) {
+                    while (cbOffset == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
+                        usleep(1000);
+                    }
+                    bitMask[cbOffset] = bitMaskSetClr[i];
+                    dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
+                    dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
+                    dmaCb[cbOffset].dstAddress = getPeripheralAddress((i > 0) ? setRegister : clrRegister);
+                    dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                    dmaCb[cbOffset].transferLen = sizeof(uint32_t);
+                    cbOffset++;
+                    if (cbOffset == DMA_BUFFER_SIZE) {
+                        cbAvailable = false;
+                        break;
+                    }
                 }
             }
             if (cbAvailable) {
                 while (cbOffset == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
                     usleep(1000);
                 }
+                bitMask[cbOffset] = 0x00000000;
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
-                dmaCb[cbOffset].srcAddress = getMemoryAddress(pwmData);
+                dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
                 dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
                 dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
                 dmaCb[cbOffset].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
@@ -571,18 +593,17 @@ int main(int argc, char** argv)
     signal(SIGINT, sigIntHandler);
     signal(SIGTSTP, sigIntHandler);
     try {
-        int listenFd, connFd;
+        int listenFd, connFd, enable = 1;
         struct sockaddr_in servAddr;
 
         char readBuff[RW_BUFFER_SIZE];
         char sendBuff[RW_BUFFER_SIZE];
 
-        GPIOController *gpio = &GPIOController::getInstance();
-
-        gpio->setPwm(4, 20.0f, 1.0f);
-        gpio->setMode(4, GPIO_MODE_PWM);
-
         if ((listenFd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) == -1) {
+            throw exception();
+        }
+
+        if (setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, (char *)&enable, sizeof(enable)) == -1) {
             throw exception();
         }
 
@@ -601,6 +622,10 @@ int main(int argc, char** argv)
             throw exception();
         }
 
+        GPIOController *gpio = &GPIOController::getInstance();
+        gpio->setPwm(GPIO4, 20.0f, 1.0f);
+        gpio->setMode(GPIO4, GPIO_MODE_PWM);
+
         while(!stop) {
             if ((connFd = accept(listenFd, (struct sockaddr*)NULL, NULL)) == -1) {
                 usleep(1000);
@@ -611,12 +636,12 @@ int main(int argc, char** argv)
             read(connFd, readBuff, sizeof(readBuff));
             if (strcmp(readBuff, "1\r\n") == 0) {
                 sprintf(sendBuff, "OK:1\r\n");
-                gpio->setPwm(4, 20.0f, 2.0f);
+                gpio->setPwm(GPIO4, 20.0f, 2.0f);
                 cout << "Level set: 1" << endl;
                 usleep(1000);
             } else if (strcmp(readBuff, "0\r\n") == 0) {
                 sprintf(sendBuff, "OK:0\r\n");
-                gpio->setPwm(4, 20.0f, 1.0f);
+                gpio->setPwm(GPIO4, 20.0f, 1.0f);
                 cout << "Level set: 0" << endl;
                 usleep(1000);
             } else {
@@ -624,8 +649,12 @@ int main(int argc, char** argv)
                 cout << "Received unknown command" << endl;
             }
             write(connFd, sendBuff, strlen(sendBuff));
+            shutdown(connFd, SHUT_RDWR);
             close(connFd);
         }
+
+        gpio->setMode(GPIO4, GPIO_MODE_OUT);
+        gpio->set(GPIO4, false);
 
         close(listenFd);
     } catch (exception &error) {
