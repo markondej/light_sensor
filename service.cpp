@@ -153,7 +153,7 @@ struct DMARegisters {
 
 struct GPIO {
     uint8_t number;
-    volatile uint32_t *fnselRegister;
+    volatile uint32_t *fnselReg;
     uint32_t fnselBit;
     uint8_t mode;
     double pwmPeriod, pwmWidth;
@@ -192,8 +192,8 @@ class GPIOController
         static bool pwmEnabled;
         static uint8_t dmaChannel;
         static uint32_t memSize, memAddress, memHandle;
-        static volatile uint32_t *setRegister, *clrRegister;
-        volatile uint32_t *levelRegister;
+        static volatile uint32_t *setReg, *clrReg;
+        volatile uint32_t *levelReg;
         volatile GPIOPullUpDownRegisters *pud;
         static void *memAllocated;
         static int mBoxFd;
@@ -208,8 +208,8 @@ uint8_t GPIOController::dmaChannel = 0;
 uint32_t GPIOController::memSize = 0;
 uint32_t GPIOController::memAddress = 0x00000000;
 uint32_t GPIOController::memHandle = 0;
-volatile uint32_t *GPIOController::setRegister = NULL;
-volatile uint32_t *GPIOController::clrRegister = NULL;
+volatile uint32_t *GPIOController::setReg = NULL;
+volatile uint32_t *GPIOController::clrReg = NULL;
 void *GPIOController::memAllocated = NULL;
 int GPIOController::mBoxFd = 0;
 
@@ -226,9 +226,9 @@ GPIOController::GPIOController()
         throw exception();
     }
 
-    setRegister = (uint32_t *)getPeripheral(GPIO_SET0_OFFSET);
-    clrRegister = (uint32_t *)getPeripheral(GPIO_CLR0_OFFSET);
-    levelRegister = (uint32_t *)getPeripheral(GPIO_LEVEL0_OFFSET);
+    setReg = (uint32_t *)getPeripheral(GPIO_SET0_OFFSET);
+    clrReg = (uint32_t *)getPeripheral(GPIO_CLR0_OFFSET);
+    levelReg = (uint32_t *)getPeripheral(GPIO_LEVEL0_OFFSET);
     pud = (GPIOPullUpDownRegisters *)getPeripheral(GPIO_PUDCTL_OFFSET);
 
     gpio = new GPIO[GPIO_COUNT];
@@ -331,8 +331,8 @@ void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
                 default:
                     throw exception();
             }
-            uint32_t fnsel = *selected->fnselRegister & ((0xFFFFFFF8 << selected->fnselBit) | (0xFFFFFFFF >> (32 - selected->fnselBit)));
-            *selected->fnselRegister = fnsel | (func << selected->fnselBit);
+            uint32_t fnsel = *selected->fnselReg & ((0xFFFFFFF8 << selected->fnselBit) | (0xFFFFFFFF >> (32 - selected->fnselBit)));
+            *selected->fnselReg = fnsel | (func << selected->fnselBit);
             if (mode == GPIO_MODE_PWM) {
                 if (!pwmEnabled) {
                     pwmEnabled = true;
@@ -392,8 +392,8 @@ void GPIOController::set(uint8_t gpioNo, bool high)
         GPIO *selected = &gpio[i];
         if (selected->number == gpioNo) {
             if (selected->mode != GPIO_MODE_PWM) {
-                volatile uint32_t *regist = high ? setRegister : clrRegister;
-                *regist = 0x01 << selected->number;
+                volatile uint32_t *reg = high ? setReg : clrReg;
+                *reg = 0x01 << selected->number;
             }
             break;
         }
@@ -406,7 +406,7 @@ bool GPIOController::get(uint8_t gpioNo)
         GPIO *selected = &gpio[i];
         if (selected->number == gpioNo) {
             if (selected->mode != GPIO_MODE_PWM) {
-                return (bool)(*levelRegister & (0x01 << selected->number));
+                return (bool)(*levelReg & (0x01 << selected->number));
             }
             break;
         }
@@ -476,7 +476,7 @@ void *GPIOController::pwmCallback(void *params)
                 bitMask[cbOffset] = bitMaskSetClr[i];
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
                 dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
-                dmaCb[cbOffset].dstAddress = getPeripheralAddress((i > 0) ? setRegister : clrRegister);
+                dmaCb[cbOffset].dstAddress = getPeripheralAddress((i > 0) ? setReg : clrReg);
                 dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
                 dmaCb[cbOffset].transferLen = sizeof(uint32_t);
                 cbOffset++;
@@ -536,7 +536,7 @@ void *GPIOController::pwmCallback(void *params)
                     bitMask[cbOffset] = bitMaskSetClr[i];
                     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
                     dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
-                    dmaCb[cbOffset].dstAddress = getPeripheralAddress((i > 0) ? setRegister : clrRegister);
+                    dmaCb[cbOffset].dstAddress = getPeripheralAddress((i > 0) ? setReg : clrReg);
                     dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
                     dmaCb[cbOffset].transferLen = sizeof(uint32_t);
                     cbOffset++;
