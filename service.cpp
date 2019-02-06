@@ -1,10 +1,10 @@
 /*
-    rpi_cpp_gpio_control - Raspberry Pi GPIO control library for C++
+    rpi_gpio_service - Raspberry Pi GPIO control library for C++
 
     Copyright (c) 2019, Marcin Kondej
     All rights reserved.
 
-    See https://github.com/markondej/rpi_cpp_gpio_control
+    See https://github.com/markondej/rpi_gpio_service
 
     Redistribution and use in source and binary forms, with or without modification, are
     permitted provided that the following conditions are met:
@@ -31,9 +31,10 @@
     WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <unistd.h>
 #include "mailbox.h"
 #include <bcm_host.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <iostream>
@@ -52,6 +53,7 @@
 
 #define BCM2837_MEM_FLAG 0x04
 #define BCM2835_MEM_FLAG 0x0C
+
 #define PWM_CHANNEL_RANGE 32
 #define DMA_BUFFER_SIZE 1024
 #define DMA_FREQUENCY 100000
@@ -67,13 +69,12 @@
 #define GPIO_PULL_UP 0x02
 #define GPIO_PULL_DOWN 0x01
 
-#define SENSOR_SCALE 100000
-#define SENSOR_RESET_TIME 100000
+#define SERVICE_PORT 5000
+#define SERVICE_MAX_CONNECTIONS 10
+#define RW_BUFFER_SIZE 1024
 
-using std::string;
 using std::exception;
 using std::cout;
-using std::flush;
 using std::endl;
 
 struct ClockRegisters {
@@ -197,13 +198,13 @@ GPIOController::GPIOController()
     for (uint8_t i = 0; i < GPIO_COUNT; i++) {
         gpio[i] = {
             (uint8_t)(i + 2),
-            (uint32_t *)getPeripheral(GPIO_SET0_OFFSET), 
-            (uint32_t *)getPeripheral(GPIO_CLR0_OFFSET), 
+            (uint32_t *)getPeripheral(GPIO_SET0_OFFSET),
+            (uint32_t *)getPeripheral(GPIO_CLR0_OFFSET),
             (uint32_t *)getPeripheral(GPIO_LEVEL0_OFFSET),
-            (uint32_t *)getPeripheral(GPIO_FSEL_BASE_OFFSET + ((uint32_t)(i + 2) * 3) / 30 * sizeof(uint32_t)), 
-            ((uint32_t)(i + 2) * 3) % 30, 
-            GPIO_MODE_UNKNOWN, 
-            20.0, 
+            (uint32_t *)getPeripheral(GPIO_FSEL_BASE_OFFSET + ((uint32_t)(i + 2) * 3) / 30 * sizeof(uint32_t)),
+            ((uint32_t)(i + 2) * 3) % 30,
+            GPIO_MODE_UNKNOWN,
+            20.0,
             1.0
         };
     }
@@ -347,7 +348,7 @@ void GPIOController::setPullUD(uint8_t gpioNo, uint32_t type) {
 
 void GPIOController::setPwm(uint8_t gpioNo, double period, double width)
 {
-    if ((period > 0.0f) && (width > 0.0f) && (width < period)) {
+    if ((period > 0.0f) && (width >= 0.0f) && (width <= period)) {
         for (uint8_t i = 0; i < GPIO_COUNT; i++) {
             GPIO *selected = &gpio[i];
             if (selected->number == gpioNo) {
@@ -397,10 +398,9 @@ void *GPIOController::pwmCallback(void *params)
     }
 
     PWM *pwmInfo = new PWM[GPIO_COUNT];
+    memset(pwmInfo, 0, sizeof(PWM) * GPIO_COUNT);
     for (uint8_t i = 0; i < GPIO_COUNT; i++) {
         pwmInfo[i].gpio = &gpio[i];
-        pwmInfo[i].enabled = false;
-        pwmInfo[i].start = 0;
     }
 
     volatile ClockRegisters *pwmClk = (ClockRegisters *)getPeripheral(PWMCLK_BASE_OFFSET);
@@ -427,11 +427,8 @@ void *GPIOController::pwmCallback(void *params)
         bitMask[i] = 0x01 << pwmInfo[i].gpio->number;
     }
 
-    for (uint32_t i = 0; i < DMA_BUFFER_SIZE; i++) {
-        dmaCb[i].stride = 0;
-    }
-
     uint32_t cbOffset = 0;
+    memset((void *)dmaCb, 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
     dmaCb[cbOffset].srcAddress = getMemoryAddress(pwmData);
     dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
@@ -451,11 +448,11 @@ void *GPIOController::pwmCallback(void *params)
                 pwmInfo[i].end = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmWidth / 1000.0f;
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
                 dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
-                dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->set);
+                dmaCb[cbOffset].dstAddress = getPeripheralAddress((pwmInfo[i].end != offset) ? pwmInfo[i].gpio->set : pwmInfo[i].gpio->clr);
                 dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
                 dmaCb[cbOffset].transferLen = sizeof(uint32_t);
                 cbOffset++;
-            } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled) {
+            } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled && (pwmInfo[i].end != pwmInfo[i].start)) {
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
                 dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
                 dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->clr);
@@ -509,11 +506,11 @@ void *GPIOController::pwmCallback(void *params)
                     pwmInfo[i].end = offset + DMA_FREQUENCY * pwmInfo[i].gpio->pwmWidth / 1000.0f;
                     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
                     dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
-                    dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->set);
+                    dmaCb[cbOffset].dstAddress = getPeripheralAddress((pwmInfo[i].end != offset) ? pwmInfo[i].gpio->set : pwmInfo[i].gpio->clr);
                     dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
                     dmaCb[cbOffset].transferLen = sizeof(uint32_t);
                     cbOffset++;
-                } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled) {
+                } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled && (pwmInfo[i].end != pwmInfo[i].start)) {
                     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
                     dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[i]);
                     dmaCb[cbOffset].dstAddress = getPeripheralAddress(pwmInfo[i].gpio->clr);
@@ -548,7 +545,7 @@ void *GPIOController::pwmCallback(void *params)
         dmaCb[cbOffset - 1].nextCbAddress = getMemoryAddress(dmaCb);
     }
 
-    dmaCb[cbOffset - 1].nextCbAddress = 0x00000000;    
+    dmaCb[cbOffset - 1].nextCbAddress = 0x00000000;
     while (dma->cbAddress != 0x00000000) {
         usleep(1);
     }
@@ -574,18 +571,63 @@ int main(int argc, char** argv)
     signal(SIGINT, sigIntHandler);
     signal(SIGTSTP, sigIntHandler);
     try {
+        int listenFd, connFd;
+        struct sockaddr_in servAddr;
+
+        char readBuff[RW_BUFFER_SIZE];
+        char sendBuff[RW_BUFFER_SIZE];
+
         GPIOController *gpio = &GPIOController::getInstance();
-        gpio->setPwm(4, 20.0f, 1.0f); // Configure PWM on GPIO4, period = 20ms, pulse width = 1ms
-        gpio->setMode(4, GPIO_MODE_PWM); // Turn on PWM on GPIO4 with selected configuration
-        gpio->setMode(21, GPIO_MODE_OUT); // Use GPIO21 as an output
-        gpio->set(21, true); // Set GPIO21 high
-        usleep(1000000); // Wait 1s
-        gpio->set(21, false); // Set GPIO21 low
-        gpio->setPwm(4, 20.0f, 1.5f); // Change previously selected PWM pulse width to 1.5s
-        usleep(1000000); // Wait 1s
-        gpio->setPullUD(21, GPIO_PULL_UP); // Turn on pull-up on GPIO21
-        gpio->setMode(21, GPIO_MODE_IN); // Use GPIO21 as an input
-        cout << "INPUT: " << (gpio->get(21) ? "HIGH" : "LOW") << endl; // Print input level
+
+        gpio->setPwm(4, 20.0f, 1.0f);
+        gpio->setMode(4, GPIO_MODE_PWM);
+
+        if ((listenFd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) == -1) {
+            throw exception();
+        }
+
+        memset(&servAddr, 0, sizeof(servAddr));
+        servAddr.sin_family = AF_INET;
+        servAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        servAddr.sin_port = htons(SERVICE_PORT);
+
+        if (bind(listenFd, (struct sockaddr*)&servAddr, sizeof(servAddr)) == -1) {
+            close(listenFd);
+            throw exception();
+        }
+
+        if (listen(listenFd, SERVICE_MAX_CONNECTIONS) == -1) {
+            close(listenFd);
+            throw exception();
+        }
+
+        while(!stop) {
+            if ((connFd = accept(listenFd, (struct sockaddr*)NULL, NULL)) == -1) {
+                usleep(100);
+                continue;
+            }
+            memset(readBuff, 0, sizeof(readBuff));
+            memset(sendBuff, 0, sizeof(sendBuff));
+            read(connFd, readBuff, sizeof(readBuff));
+            if (strcmp(readBuff, "1\r\n") == 0) {
+                sprintf(sendBuff, "OK:1\r\n");
+                gpio->setPwm(4, 20.0f, 2.0f);
+                cout << "Level set: 1" << endl;
+                usleep(100);
+            } else if (strcmp(readBuff, "0\r\n") == 0) {
+                sprintf(sendBuff, "OK:0\r\n");
+                gpio->setPwm(4, 20.0f, 1.0f);
+                cout << "Level set: 0" << endl;
+                usleep(100);
+            } else {
+                sprintf(sendBuff, "ERROR:VALUE UNKNOWN\r\n");
+                cout << "Received unknown command" << endl;
+            }
+            write(connFd, sendBuff, strlen(sendBuff));
+            close(connFd);
+        }
+
+        close(listenFd);
     } catch (exception &error) {
         cout << "An error occurred, check your privileges" << endl;
         return 1;

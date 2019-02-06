@@ -1,24 +1,28 @@
-# rpi_cpp_gpio_control
-Raspberry Pi GPIO control library for C++
+# rpi_gpio_service
+Simple Raspberry Pi GPIO control service written in C++
+
+The aim of this project is to bring up simple service on Raspberry Pi device, which would allow controlling GPIO ports by calling proper net interfaces. The included simple service allows control of PWM's pulse width on GPIO4 pin and may be easly changed allowing other features.
+
+Simply plug servo to Raspberry Pi's GPIO4, as shown below:
+
+![Servo connected to Raspberry Pi](images/rpi_servo.png)
+
+Then start service with "sudo ./gpio_service" command in terminal on Raspberry Pi, and finaly connect to service from Your PC eg. with [PuTTY](https://www.putty.org/) (port 5000 is used by default):
+
+![PuTTY configuration](images/putty_conf.png)
+
+Servo controll will be possible by typing either "1" or "0" in PuTTY's terminal.
 
 Features:
 * works directly on peripherals, no additional drivers needed
-* multiple PWM support (multiple servos control), PWM on any available GPIO pin
-* supports input and output control
-* supports Pull-Up and Pull-Down resistors control
+* possible multiple PWM support (multiple servos control), PWM on any available GPIO pin
+* possible input and output control
+* possible Pull-Up and Pull-Down resistors control
 
-Usage:
+To build and run service on Raspberry Pi clone this repository and use "make" command, eg.:
 ```
-GPIOController *gpio = &GPIOController::getInstance();
-gpio->setPwm(4, 20.0f, 1.0f); // Configure PWM on GPIO4, period = 20ms, pulse width = 1ms
-gpio->setMode(4, GPIO_MODE_PWM); // Turn on PWM on GPIO4 with selected configuration
-gpio->setMode(21, GPIO_MODE_OUT); // Use GPIO21 as an output
-gpio->set(21, true); // Set GPIO21 high
-usleep(1000000); // Wait 1s
-gpio->set(21, false); // Set GPIO21 low
-gpio->setPwm(4, 20.0f, 1.5f); // Change previously selected PWM pulse width to 1.5s
-usleep(1000000); // Wait 1s
-gpio->setPullUD(21, GPIO_PULL_UP); // Turn on pull-up on GPIO21
-gpio->setMode(21, GPIO_MODE_IN); // Use GPIO21 as an input
-cout << "INPUT: " << (gpio->get(21) ? "HIGH" : "LOW") << endl; // Print input level
+git clone https://github.com/markondej/rpi_gpio_service
+cd rpi_gpio_service
+make
+sudo ./gpio_service
 ```
