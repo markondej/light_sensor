@@ -547,7 +547,7 @@ void *GPIOController::pwmCallback(void *params)
 
     dmaCb[cbOffset - 1].nextCbAddress = 0x00000000;
     while (dma->cbAddress != 0x00000000) {
-        usleep(1);
+        usleep(1000);
     }
 
     dma->ctlStatus = (0x01 << 31);
