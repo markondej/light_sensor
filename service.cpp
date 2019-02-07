@@ -599,7 +599,7 @@ int main(int argc, char** argv)
         char readBuff[RW_BUFFER_SIZE];
         char sendBuff[RW_BUFFER_SIZE];
 
-        if ((listenFd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) == -1) {
+        if ((listenFd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
             throw exception();
         }
 
@@ -628,25 +628,26 @@ int main(int argc, char** argv)
 
         while(!stop) {
             if ((connFd = accept(listenFd, (struct sockaddr*)NULL, NULL)) == -1) {
-                usleep(1000);
-                continue;
+                close(listenFd);
+                throw exception();
             }
             memset(readBuff, 0, sizeof(readBuff));
             memset(sendBuff, 0, sizeof(sendBuff));
-            read(connFd, readBuff, sizeof(readBuff));
+            if (read(connFd, readBuff, sizeof(readBuff)) == -1) {
+                close(connFd);
+                continue;
+            }
             if (strcmp(readBuff, "1\r\n") == 0) {
                 sprintf(sendBuff, "OK:1\r\n");
                 gpio->setPwm(GPIO4, 20.0f, 2.0f);
                 cout << "Level set: 1" << endl;
-                usleep(1000);
             } else if (strcmp(readBuff, "0\r\n") == 0) {
                 sprintf(sendBuff, "OK:0\r\n");
                 gpio->setPwm(GPIO4, 20.0f, 1.0f);
                 cout << "Level set: 0" << endl;
-                usleep(1000);
             } else {
                 sprintf(sendBuff, "ERROR:VALUE UNKNOWN\r\n");
-                cout << "Received unknown command" << endl;
+                cout << "Received unknown value" << endl;
             }
             write(connFd, sendBuff, strlen(sendBuff));
             shutdown(connFd, SHUT_RDWR);
