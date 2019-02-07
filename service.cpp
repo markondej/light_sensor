@@ -588,6 +588,11 @@ void sigIntHandler(int sigNum)
     stop = true;
 }
 
+struct Client {
+    int socketFd;
+    bool active;
+};
+
 int main(int argc, char** argv)
 {
     signal(SIGINT, sigIntHandler);
@@ -596,10 +601,7 @@ int main(int argc, char** argv)
         int socketFd, acceptedFd, enable = 1;
         struct sockaddr_in servAddr;
 
-        char readBuff[RW_BUFFER_SIZE];
-        char sendBuff[RW_BUFFER_SIZE];
-
-        if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        if ((socketFd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) == -1) {
             throw exception();
         }
 
@@ -622,42 +624,81 @@ int main(int argc, char** argv)
             throw exception();
         }
 
+        bool connect, error = false;
+        char recvBuff[RW_BUFFER_SIZE], sendBuff[RW_BUFFER_SIZE];
+        Client clients[SERVICE_MAX_CONNECTIONS];
+
         GPIOController *gpio = &GPIOController::getInstance();
         gpio->setPwm(GPIO4, 20.0f, 1.0f);
         gpio->setMode(GPIO4, GPIO_MODE_PWM);
 
+        memset(&clients, 0, sizeof(clients));
         while(!stop) {
-            if ((acceptedFd = accept(socketFd, (struct sockaddr*)NULL, NULL)) == -1) {
-                close(socketFd);
-                throw exception();
+            if ((acceptedFd = accept(socketFd, (struct sockaddr*)NULL, NULL)) != -1) {
+                connect = false;
+                for (uint8_t i = 0; i < SERVICE_MAX_CONNECTIONS; i++) {
+                    if (!clients[i].active) {
+                        clients[i].socketFd = acceptedFd;
+                        clients[i].active = true;
+                        connect = true;
+                    }
+                }
+                if (!connect) {
+                    shutdown(acceptedFd, SHUT_RDWR);
+                    close(acceptedFd);
+                }
+            } else if ((errno != EAGAIN) && (errno != EWOULDBLOCK)) {
+                error = true;
+                break;
             }
-            memset(readBuff, 0, sizeof(readBuff));
-            memset(sendBuff, 0, sizeof(sendBuff));
-            if (read(acceptedFd, readBuff, sizeof(readBuff)) == -1) {
-                close(acceptedFd);
-                continue;
+            for (uint8_t i = 0; i < SERVICE_MAX_CONNECTIONS; i++) {
+                if (clients[i].active) {
+                    memset(recvBuff, 0, sizeof(recvBuff));
+                    if (recv(clients[i].socketFd, recvBuff, sizeof(recvBuff), MSG_DONTWAIT) != -1) {
+                        memset(sendBuff, 0, sizeof(sendBuff));
+
+                        if (strcmp(recvBuff, "1\r\n") == 0) {
+                            sprintf(sendBuff, "OK:1\r\n");
+                            gpio->setPwm(GPIO4, 20.0f, 2.0f);
+                            cout << "Level set: 1" << endl;
+                        } else if (strcmp(recvBuff, "0\r\n") == 0) {
+                            sprintf(sendBuff, "OK:0\r\n");
+                            gpio->setPwm(GPIO4, 20.0f, 1.0f);
+                            cout << "Level set: 0" << endl;
+                        } else {
+                            sprintf(sendBuff, "ERROR:VALUE UNKNOWN\r\n");
+                            cout << "Received unknown value" << endl;
+                        }
+
+                        send(clients[i].socketFd, sendBuff, strlen(sendBuff), 0);
+                        clients[i].active = false;
+                        shutdown(clients[i].socketFd, SHUT_RDWR);
+                        close(clients[i].socketFd);
+                    } else if ((errno != EAGAIN) && (errno != EWOULDBLOCK)) {
+                        clients[i].active = false;
+                        close(clients[i].socketFd);
+                    }
+                }
             }
-            if (strcmp(readBuff, "1\r\n") == 0) {
-                sprintf(sendBuff, "OK:1\r\n");
-                gpio->setPwm(GPIO4, 20.0f, 2.0f);
-                cout << "Level set: 1" << endl;
-            } else if (strcmp(readBuff, "0\r\n") == 0) {
-                sprintf(sendBuff, "OK:0\r\n");
-                gpio->setPwm(GPIO4, 20.0f, 1.0f);
-                cout << "Level set: 0" << endl;
-            } else {
-                sprintf(sendBuff, "ERROR:VALUE UNKNOWN\r\n");
-                cout << "Received unknown value" << endl;
-            }
-            write(acceptedFd, sendBuff, strlen(sendBuff));
-            shutdown(acceptedFd, SHUT_RDWR);
-            close(acceptedFd);
+
+            usleep(1000);
         }
 
         gpio->setMode(GPIO4, GPIO_MODE_OUT);
         gpio->set(GPIO4, false);
 
+        for (uint8_t i = 0; i < SERVICE_MAX_CONNECTIONS; i++) {
+            if (clients[i].active) {
+                clients[i].active = false;
+                shutdown(clients[i].socketFd, SHUT_RDWR);
+                close(clients[i].socketFd);
+            }
+        }
         close(socketFd);
+
+        if (error) {
+            throw exception();
+        }
     } catch (exception &error) {
         cout << "An error occurred, check your privileges" << endl;
         return 1;
