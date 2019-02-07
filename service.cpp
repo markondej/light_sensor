@@ -593,17 +593,17 @@ int main(int argc, char** argv)
     signal(SIGINT, sigIntHandler);
     signal(SIGTSTP, sigIntHandler);
     try {
-        int listenFd, connFd, enable = 1;
+        int socketFd, acceptedFd, enable = 1;
         struct sockaddr_in servAddr;
 
         char readBuff[RW_BUFFER_SIZE];
         char sendBuff[RW_BUFFER_SIZE];
 
-        if ((listenFd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
             throw exception();
         }
 
-        if (setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, (char *)&enable, sizeof(enable)) == -1) {
+        if (setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, (char *)&enable, sizeof(enable)) == -1) {
             throw exception();
         }
 
@@ -612,13 +612,13 @@ int main(int argc, char** argv)
         servAddr.sin_addr.s_addr = htonl(INADDR_ANY);
         servAddr.sin_port = htons(SERVICE_PORT);
 
-        if (bind(listenFd, (struct sockaddr*)&servAddr, sizeof(servAddr)) == -1) {
-            close(listenFd);
+        if (bind(socketFd, (struct sockaddr*)&servAddr, sizeof(servAddr)) == -1) {
+            close(socketFd);
             throw exception();
         }
 
-        if (listen(listenFd, SERVICE_MAX_CONNECTIONS) == -1) {
-            close(listenFd);
+        if (listen(socketFd, SERVICE_MAX_CONNECTIONS) == -1) {
+            close(socketFd);
             throw exception();
         }
 
@@ -627,14 +627,14 @@ int main(int argc, char** argv)
         gpio->setMode(GPIO4, GPIO_MODE_PWM);
 
         while(!stop) {
-            if ((connFd = accept(listenFd, (struct sockaddr*)NULL, NULL)) == -1) {
-                close(listenFd);
+            if ((acceptedFd = accept(socketFd, (struct sockaddr*)NULL, NULL)) == -1) {
+                close(socketFd);
                 throw exception();
             }
             memset(readBuff, 0, sizeof(readBuff));
             memset(sendBuff, 0, sizeof(sendBuff));
-            if (read(connFd, readBuff, sizeof(readBuff)) == -1) {
-                close(connFd);
+            if (read(acceptedFd, readBuff, sizeof(readBuff)) == -1) {
+                close(acceptedFd);
                 continue;
             }
             if (strcmp(readBuff, "1\r\n") == 0) {
@@ -649,15 +649,15 @@ int main(int argc, char** argv)
                 sprintf(sendBuff, "ERROR:VALUE UNKNOWN\r\n");
                 cout << "Received unknown value" << endl;
             }
-            write(connFd, sendBuff, strlen(sendBuff));
-            shutdown(connFd, SHUT_RDWR);
-            close(connFd);
+            write(acceptedFd, sendBuff, strlen(sendBuff));
+            shutdown(acceptedFd, SHUT_RDWR);
+            close(acceptedFd);
         }
 
         gpio->setMode(GPIO4, GPIO_MODE_OUT);
         gpio->set(GPIO4, false);
 
-        close(listenFd);
+        close(socketFd);
     } catch (exception &error) {
         cout << "An error occurred, check your privileges" << endl;
         return 1;
