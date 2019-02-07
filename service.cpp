@@ -641,6 +641,7 @@ int main(int argc, char** argv)
                         clients[i].socketFd = acceptedFd;
                         clients[i].active = true;
                         connect = true;
+                        break;
                     }
                 }
                 if (!connect) {
