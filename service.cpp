@@ -169,7 +169,7 @@ class GPIOController
 {
     public:
         virtual ~GPIOController();
-        static GPIOController &getInstance();
+        static GPIOController& getInstance();
         static void setDmaChannel(uint8_t dmaChannel);
         void setMode(uint8_t gpioNo, uint8_t mode);
         void setPullUd(uint8_t gpioNo, uint32_t type);
@@ -179,16 +179,16 @@ class GPIOController
     private:
         GPIOController();
         GPIOController(const GPIOController &source);
-        GPIOController &operator=(const GPIOController &source);
+        GPIOController& operator=(const GPIOController &source);
         static uint32_t getMemoryAddress(volatile void *object);
         static uint32_t getPeripheralAddress(volatile void *object);
-        static void *getPeripheral(uint32_t offset);
+        static void* getPeripheral(uint32_t offset);
         static bool allocateMemory(uint32_t size);
         static void freeMemory();
-        static void *pwmCallback(void *params);
+        static void* pwmCallback(void *params);
 
-        static void* peripherals;
-        static GPIO* gpio;
+        static void *peripherals;
+        static GPIO *gpio;
         static bool pwmEnabled;
         static uint8_t dmaChannel;
         static uint32_t memSize, memAddress, memHandle;
@@ -201,8 +201,8 @@ class GPIOController
         pthread_t pwmThread;
 };
 
-void* GPIOController::peripherals = NULL;
-GPIO* GPIOController::gpio = NULL;
+void *GPIOController::peripherals = NULL;
+GPIO *GPIOController::gpio = NULL;
 bool GPIOController::pwmEnabled = false;
 uint8_t GPIOController::dmaChannel = 0;
 uint32_t GPIOController::memSize = 0;
@@ -254,7 +254,7 @@ GPIOController::~GPIOController()
     delete [] gpio;
 }
 
-GPIOController &GPIOController::getInstance()
+GPIOController& GPIOController::getInstance()
 {
     static GPIOController instance;
     return instance;
@@ -276,7 +276,7 @@ uint32_t GPIOController::getPeripheralAddress(volatile void *object) {
     return PERIPHERALS_BASE + ((uint32_t)object - (uint32_t)peripherals);
 }
 
-void *GPIOController::getPeripheral(uint32_t offset) {
+void* GPIOController::getPeripheral(uint32_t offset) {
     return (void *)((uint32_t)peripherals + offset);
 }
 
@@ -414,7 +414,7 @@ bool GPIOController::get(uint8_t gpioNo)
     return false;
 }
 
-void *GPIOController::pwmCallback(void *params)
+void* GPIOController::pwmCallback(void *params)
 {
     if (!allocateMemory(DMA_BUFFER_SIZE * sizeof(DMAControllBlock) + DMA_BUFFER_SIZE * sizeof(uint32_t))) {
         return NULL;
@@ -599,7 +599,7 @@ int main(int argc, char** argv)
         char readBuff[RW_BUFFER_SIZE];
         char sendBuff[RW_BUFFER_SIZE];
 
-        if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        if ((socketFd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) == -1) {
             throw exception();
         }
 
@@ -628,8 +628,8 @@ int main(int argc, char** argv)
 
         while(!stop) {
             if ((acceptedFd = accept(socketFd, (struct sockaddr*)NULL, NULL)) == -1) {
-                close(socketFd);
-                throw exception();
+                usleep(1000);
+                continue;
             }
             memset(readBuff, 0, sizeof(readBuff));
             memset(sendBuff, 0, sizeof(sendBuff));
