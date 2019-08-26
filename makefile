@@ -2,7 +2,7 @@ EXECUTABLE = gpio_service
 FLAGS = -Wall -O3 -std=c++11
 
 all: service.o mailbox.o
-	g++ -L/opt/vc/lib -lbcm_host -o $(EXECUTABLE) service.o mailbox.o
+	g++ -L/opt/vc/lib -lpthread -lbcm_host -o $(EXECUTABLE) service.o mailbox.o
 
 mailbox.o: mailbox.c mailbox.h
 	g++ $(FLAGS) -c mailbox.c

@@ -35,8 +35,8 @@
 #include <bcm_host.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-//#include <fcntl.h>
 #include <sys/mman.h>
+#include <fcntl.h>
 #include <iostream>
 #include <thread>
 
@@ -321,6 +321,7 @@ GPIO *GPIOController::select(uint8_t gpioNo)
 void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
 {
     GPIO *selected = select(gpioNo);
+    selected->mode = mode;
     uint8_t func;
     switch (mode) {
         case GPIO_MODE_IN:
@@ -344,9 +345,10 @@ void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
         }
     } else {
         bool stop = true;
-        for (uint8_t j = 0; j < GPIO_COUNT; j++) {
-            if ((i != j) && (gpio[j].mode == GPIO_MODE_PWM)) {
+        for (uint8_t i = 0; i < GPIO_COUNT; i++) {
+            if ((selected != &gpio[i]) && (gpio[i].mode == GPIO_MODE_PWM)) {
                 stop = false;
+                break;
             }
         }
         if (stop) {
@@ -355,7 +357,6 @@ void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
             delete pwmThread;
         }
     }
-    selected->mode = mode;
 }
 
 void GPIOController::setPullUd(uint8_t gpioNo, uint32_t type) {
@@ -392,6 +393,7 @@ bool GPIOController::get(uint8_t gpioNo)
     if (selected->mode != GPIO_MODE_PWM) {
         return (bool)(*levelReg & (0x01 << selected->number));
     }
+    return false;
 }
 
 void GPIOController::pwmCallback()
