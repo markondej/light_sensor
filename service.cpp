@@ -60,7 +60,7 @@
 #define DMA_FREQUENCY 100000
 #define PWM_WRITES_PER_CYCLE 4
 #define PAGE_SIZE 4096
-#define GPIO_COUNT 26
+#define GPIO_COUNT 28
 
 #define GPIO_MODE_IN 0
 #define GPIO_MODE_OUT 1
@@ -70,6 +70,8 @@
 #define GPIO_PULL_UP 0x02
 #define GPIO_PULL_DOWN 0x01
 
+#define GPIO0 0
+#define GPIO1 1
 #define GPIO2 2
 #define GPIO3 3
 #define GPIO4 4
@@ -232,9 +234,9 @@ GPIOController::GPIOController()
     gpio = new GPIO[GPIO_COUNT];
     for (uint8_t i = 0; i < GPIO_COUNT; i++) {
         gpio[i] = {
-            (uint8_t)(i + 2),
-            (uint32_t *)getPeripheral(GPIO_FSEL_BASE_OFFSET + ((uint32_t)(i + 2) * 3) / 30 * sizeof(uint32_t)),
-            ((uint32_t)(i + 2) * 3) % 30,
+            i,
+            (uint32_t *)getPeripheral(GPIO_FSEL_BASE_OFFSET + ((uint32_t)i * 3) / 30 * sizeof(uint32_t)),
+            ((uint32_t)i * 3) % 30,
             GPIO_MODE_UNKNOWN,
             20.0,
             1.0
@@ -312,10 +314,10 @@ void GPIOController::freeMemory()
 
 GPIO *GPIOController::select(uint8_t gpioNo)
 {
-    if ((gpioNo >= GPIO_COUNT) || (gpioNo < 2) || (gpio[gpioNo - 2].number != gpioNo)) {
+    if ((gpioNo >= GPIO_COUNT) || (gpio[gpioNo].number != gpioNo)) {
         throw std::exception();
     }
-    return &gpio[gpioNo - 2];
+    return &gpio[gpioNo];
 }
 
 void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
