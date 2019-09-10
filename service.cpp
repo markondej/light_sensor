@@ -345,7 +345,7 @@ void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
             pwmEnabled = true;
             pwmThread = new std::thread(GPIOController::pwmCallback);
         }
-    } else {
+    } else if (pwmEnabled) {
         bool stop = true;
         for (uint8_t i = 0; i < GPIO_COUNT; i++) {
             if ((selected != &gpio[i]) && (gpio[i].mode == GPIO_MODE_PWM)) {
