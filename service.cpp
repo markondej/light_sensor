@@ -42,6 +42,7 @@
 
 #define PERIPHERALS_BASE 0x7E000000
 #define BCM2835_PERIPHERALS_VIRT_BASE 0x20000000
+#define BCM2838_PERIPHERALS_VIRT_BASE 0xFE000000
 #define GPIO_FSEL_BASE_OFFSET 0x00200000
 #define GPIO_SET0_OFFSET 0x0020001C
 #define GPIO_CLR0_OFFSET 0x00200028
@@ -52,8 +53,11 @@
 #define PWMCLK_BASE_OFFSET 0x001010A0
 #define PWM_BASE_OFFSET 0x0020C000
 
-#define BCM2837_MEM_FLAG 0x04
 #define BCM2835_MEM_FLAG 0x0C
+#define BCM2838_MEM_FLAG 0x04
+
+#define BCM2835_PLLD_FREQ 500
+#define BCM2838_PLLD_FREQ 750
 
 #define PWM_CHANNEL_RANGE 32
 #define DMA_BUFFER_SIZE 1024
@@ -181,8 +185,11 @@ class GPIOController
         GPIOController();
         GPIO *select(uint8_t gpioNo);
         static void pwmCallback();
+        static float getSrcClkFreq();
         static uint32_t getMemoryAddress(volatile void *object);
         static uint32_t getPeripheralAddress(volatile void *object);
+        static uint32_t getPeripheralVirtAddress();
+        static uint32_t getPeripheralSize();
         static void *getPeripheral(uint32_t offset);
         static bool allocateMemory(uint32_t size);
         static void freeMemory();
@@ -220,7 +227,7 @@ GPIOController::GPIOController()
         throw std::exception();
     }
 
-    peripherals = mmap(nullptr, bcm_host_get_peripheral_size(), PROT_READ | PROT_WRITE, MAP_SHARED, memFd, bcm_host_get_peripheral_address());
+    peripherals = mmap(nullptr, getPeripheralSize(), PROT_READ | PROT_WRITE, MAP_SHARED, memFd, getPeripheralVirtAddress());
     close(memFd);
     if (peripherals == MAP_FAILED) {
         throw std::exception();
@@ -251,7 +258,7 @@ GPIOController::~GPIOController()
         pwmThread->join();
         delete pwmThread;
     }
-    munmap(peripherals, bcm_host_get_peripheral_size());
+    munmap(peripherals, getPeripheralSize());
     delete [] gpio;
 }
 
@@ -291,7 +298,7 @@ bool GPIOController::allocateMemory(uint32_t size)
     if (memSize % PAGE_SIZE) {
         memSize = (memSize / PAGE_SIZE + 1) * PAGE_SIZE;
     }
-    memHandle = mem_alloc(mBoxFd, size, PAGE_SIZE, (bcm_host_get_peripheral_address() == BCM2835_PERIPHERALS_VIRT_BASE) ? BCM2835_MEM_FLAG : BCM2837_MEM_FLAG);
+    memHandle = mem_alloc(mBoxFd, size, PAGE_SIZE, (getPeripheralVirtAddress() == BCM2835_PERIPHERALS_VIRT_BASE) ? BCM2835_MEM_FLAG : BCM2838_MEM_FLAG);
     if (!memHandle) {
         mbox_close(mBoxFd);
         memSize = 0;
@@ -310,6 +317,25 @@ void GPIOController::freeMemory()
 
     mbox_close(mBoxFd);
     memSize = 0;
+}
+
+uint32_t GPIOController::getPeripheralVirtAddress()
+{
+    return (bcm_host_get_peripheral_size() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PERIPHERALS_VIRT_BASE : bcm_host_get_peripheral_address();
+}
+
+uint32_t GPIOController::getPeripheralSize()
+{
+    uint32_t size = bcm_host_get_peripheral_size();
+    if (size == BCM2838_PERIPHERALS_VIRT_BASE) {
+        size = 0x01000000;
+    }
+    return size;
+}
+
+float GPIOController::getSrcClkFreq()
+{
+    return (getPeripheralVirtAddress() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PLLD_FREQ : BCM2835_PLLD_FREQ;
 }
 
 GPIO *GPIOController::select(uint8_t gpioNo)
@@ -410,7 +436,7 @@ void GPIOController::pwmCallback()
         volatile ClockRegisters *pwmClk = (ClockRegisters *)getPeripheral(PWMCLK_BASE_OFFSET);
         pwmClk->ctl = (0x5A << 24) | 0x06;
         usleep(1000);
-        pwmClk->div = (0x5A << 24) | (uint32_t)((500 << 12) / (PWM_CHANNEL_RANGE * PWM_WRITES_PER_CYCLE * DMA_FREQUENCY / 1000000.0f));
+        pwmClk->div = (0x5A << 24) | (uint32_t)(getSrcClkFreq() * (0x01 << 12) / (PWM_CHANNEL_RANGE * PWM_WRITES_PER_CYCLE * DMA_FREQUENCY / 1000000.0f));
         pwmClk->ctl = (0x5A << 24) | (0x01 << 4) | 0x06;
 
         volatile PWMRegisters *pwm = (PWMRegisters *)getPeripheral(PWM_BASE_OFFSET);
