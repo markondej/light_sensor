@@ -185,12 +185,12 @@ class GPIOController
         GPIOController();
         GPIO *select(uint8_t gpioNo);
         static void pwmCallback();
-        static float getSrcClkFreq();
-        static uint32_t getMemoryAddress(volatile void *object);
-        static uint32_t getPeripheralAddress(volatile void *object);
-        static uint32_t getPeripheralVirtAddress();
-        static uint32_t getPeripheralSize();
-        static void *getPeripheral(uint32_t offset);
+        static float getSourceFreq();
+        static uint32_t getMemoryPhysAddress(volatile void *object);
+        static uint32_t getPeripheralPhysAddress(volatile void *object);
+        static uint32_t getPeripheralVirtAddress(uint32_t offset);
+        static uint32_t getPeripheralsVirtBaseAddress();
+        static uint32_t getPeripheralsSize();
         static bool allocateMemory(uint32_t size);
         static void freeMemory();
 
@@ -227,22 +227,22 @@ GPIOController::GPIOController()
         throw std::exception();
     }
 
-    peripherals = mmap(nullptr, getPeripheralSize(), PROT_READ | PROT_WRITE, MAP_SHARED, memFd, getPeripheralVirtAddress());
+    peripherals = mmap(nullptr, getPeripheralsSize(), PROT_READ | PROT_WRITE, MAP_SHARED, memFd, getPeripheralsVirtBaseAddress());
     close(memFd);
     if (peripherals == MAP_FAILED) {
         throw std::exception();
     }
 
-    setReg = (uint32_t *)getPeripheral(GPIO_SET0_OFFSET);
-    clrReg = (uint32_t *)getPeripheral(GPIO_CLR0_OFFSET);
-    levelReg = (uint32_t *)getPeripheral(GPIO_LEVEL0_OFFSET);
-    pud = (GPIOPullUpDownRegisters *)getPeripheral(GPIO_PUDCTL_OFFSET);
+    setReg = reinterpret_cast<uint32_t *>(getPeripheralVirtAddress(GPIO_SET0_OFFSET));
+    clrReg = reinterpret_cast<uint32_t *>(getPeripheralVirtAddress(GPIO_CLR0_OFFSET));
+    levelReg = reinterpret_cast<uint32_t *>(getPeripheralVirtAddress(GPIO_LEVEL0_OFFSET));
+    pud = reinterpret_cast<GPIOPullUpDownRegisters *>(getPeripheralVirtAddress(GPIO_PUDCTL_OFFSET));
 
     gpio = new GPIO[GPIO_COUNT];
     for (uint8_t i = 0; i < GPIO_COUNT; i++) {
         gpio[i] = {
             i,
-            (uint32_t *)getPeripheral(GPIO_FSEL_BASE_OFFSET + ((uint32_t)i * 3) / 30 * sizeof(uint32_t)),
+            reinterpret_cast<uint32_t *>(getPeripheralVirtAddress(GPIO_FSEL_BASE_OFFSET + i * 3 / 30 * sizeof(uint32_t))),
             ((uint32_t)i * 3) % 30,
             GPIO_MODE_UNKNOWN,
             20.0,
@@ -258,7 +258,7 @@ GPIOController::~GPIOController()
         pwmThread->join();
         delete pwmThread;
     }
-    munmap(peripherals, getPeripheralSize());
+    munmap(peripherals, getPeripheralsSize());
     delete [] gpio;
 }
 
@@ -275,17 +275,31 @@ void GPIOController::setDmaChannel(uint8_t channel) {
     dmaChannel = channel;
 }
 
-uint32_t GPIOController::getMemoryAddress(volatile void *object)
+uint32_t GPIOController::getMemoryPhysAddress(volatile void *object)
 {
-    return (memSize) ? memAddress + ((uint32_t)object - (uint32_t)memAllocated) : 0x00000000;
+    return (memSize) ? memAddress + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(memAllocated)) : 0x00000000;
 }
 
-uint32_t GPIOController::getPeripheralAddress(volatile void *object) {
-    return PERIPHERALS_BASE + ((uint32_t)object - (uint32_t)peripherals);
+uint32_t GPIOController::getPeripheralPhysAddress(volatile void *object) {
+    return PERIPHERALS_BASE + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(peripherals));
 }
 
-void* GPIOController::getPeripheral(uint32_t offset) {
-    return (void *)((uint32_t)peripherals + offset);
+uint32_t GPIOController::getPeripheralVirtAddress(uint32_t offset) {
+    return reinterpret_cast<uint32_t>(peripherals) + offset;
+}
+
+uint32_t GPIOController::getPeripheralsVirtBaseAddress()
+{
+    return (bcm_host_get_peripheral_size() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PERIPHERALS_VIRT_BASE : bcm_host_get_peripheral_address();
+}
+
+uint32_t GPIOController::getPeripheralsSize()
+{
+    uint32_t size = bcm_host_get_peripheral_size();
+    if (size == BCM2838_PERIPHERALS_VIRT_BASE) {
+        size = 0x01000000;
+    }
+    return size;
 }
 
 bool GPIOController::allocateMemory(uint32_t size)
@@ -298,7 +312,7 @@ bool GPIOController::allocateMemory(uint32_t size)
     if (memSize % PAGE_SIZE) {
         memSize = (memSize / PAGE_SIZE + 1) * PAGE_SIZE;
     }
-    memHandle = mem_alloc(mBoxFd, size, PAGE_SIZE, (getPeripheralVirtAddress() == BCM2835_PERIPHERALS_VIRT_BASE) ? BCM2835_MEM_FLAG : BCM2838_MEM_FLAG);
+    memHandle = mem_alloc(mBoxFd, size, PAGE_SIZE, (getPeripheralsVirtBaseAddress() == BCM2835_PERIPHERALS_VIRT_BASE) ? BCM2835_MEM_FLAG : BCM2838_MEM_FLAG);
     if (!memHandle) {
         mbox_close(mBoxFd);
         memSize = 0;
@@ -319,23 +333,9 @@ void GPIOController::freeMemory()
     memSize = 0;
 }
 
-uint32_t GPIOController::getPeripheralVirtAddress()
+float GPIOController::getSourceFreq()
 {
-    return (bcm_host_get_peripheral_size() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PERIPHERALS_VIRT_BASE : bcm_host_get_peripheral_address();
-}
-
-uint32_t GPIOController::getPeripheralSize()
-{
-    uint32_t size = bcm_host_get_peripheral_size();
-    if (size == BCM2838_PERIPHERALS_VIRT_BASE) {
-        size = 0x01000000;
-    }
-    return size;
-}
-
-float GPIOController::getSrcClkFreq()
-{
-    return (getPeripheralVirtAddress() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PLLD_FREQ : BCM2835_PLLD_FREQ;
+    return (getPeripheralsVirtBaseAddress() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PLLD_FREQ : BCM2835_PLLD_FREQ;
 }
 
 GPIO *GPIOController::select(uint8_t gpioNo)
@@ -433,13 +433,13 @@ void GPIOController::pwmCallback()
             pwmInfo[i].gpio = &gpio[i];
         }
 
-        volatile ClockRegisters *pwmClk = (ClockRegisters *)getPeripheral(PWMCLK_BASE_OFFSET);
+        volatile ClockRegisters *pwmClk = reinterpret_cast<ClockRegisters *>(getPeripheralVirtAddress(PWMCLK_BASE_OFFSET));
         pwmClk->ctl = (0x5A << 24) | 0x06;
         usleep(1000);
-        pwmClk->div = (0x5A << 24) | (uint32_t)(getSrcClkFreq() * (0x01 << 12) / (PWM_CHANNEL_RANGE * PWM_WRITES_PER_CYCLE * DMA_FREQUENCY / 1000000.0f));
+        pwmClk->div = (0x5A << 24) | static_cast<uint32_t>(getSourceFreq() * (0x01 << 12) / (PWM_CHANNEL_RANGE * PWM_WRITES_PER_CYCLE * DMA_FREQUENCY / 1000000.0f));
         pwmClk->ctl = (0x5A << 24) | (0x01 << 4) | 0x06;
 
-        volatile PWMRegisters *pwm = (PWMRegisters *)getPeripheral(PWM_BASE_OFFSET);
+        volatile PWMRegisters *pwm = reinterpret_cast<PWMRegisters *>(getPeripheralVirtAddress(PWM_BASE_OFFSET));
         pwm->ctl = 0x00;
         usleep(1000);
         pwm->status = 0x01FC;
@@ -449,16 +449,16 @@ void GPIOController::pwmCallback()
         pwm->dmaConf = (0x01 << 31) | 0x0707;
         pwm->ctl = (0x01 << 5) | (0x01 << 2) | 0x01;
 
-        volatile DMAControllBlock *dmaCb = (DMAControllBlock *)memAllocated;
-        volatile uint32_t *bitMask = (uint32_t *)((uint32_t)dmaCb + DMA_BUFFER_SIZE * sizeof(DMAControllBlock));
+        volatile DMAControllBlock *dmaCb = reinterpret_cast<DMAControllBlock *>(memAllocated);
+        volatile uint32_t *bitMask = reinterpret_cast<uint32_t *>(reinterpret_cast<uint32_t>(dmaCb) + DMA_BUFFER_SIZE * sizeof(DMAControllBlock));
 
         uint32_t cbOffset = 0;
-        memset((void *)dmaCb, 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
-        memset((void *)bitMask, 0, sizeof(uint32_t) * DMA_BUFFER_SIZE);
+        memset(const_cast<DMAControllBlock *>(dmaCb), 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
+        memset(const_cast<uint32_t *>(bitMask), 0, sizeof(uint32_t) * DMA_BUFFER_SIZE);
         dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
-        dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
-        dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
-        dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+        dmaCb[cbOffset].srcAddress = getMemoryPhysAddress(&bitMask[cbOffset]);
+        dmaCb[cbOffset].dstAddress = getPeripheralPhysAddress(&pwm->fifoIn);
+        dmaCb[cbOffset].nextCbAddress = getMemoryPhysAddress(&dmaCb[cbOffset + 1]);
         dmaCb[cbOffset].transferLen = 8 * PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
         cbOffset++;
 
@@ -482,9 +482,9 @@ void GPIOController::pwmCallback()
                 if (bitMaskSetClr[i]) {
                     bitMask[cbOffset] = bitMaskSetClr[i];
                     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
-                    dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
-                    dmaCb[cbOffset].dstAddress = getPeripheralAddress((i > 0) ? setReg : clrReg);
-                    dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                    dmaCb[cbOffset].srcAddress = getMemoryPhysAddress(&bitMask[cbOffset]);
+                    dmaCb[cbOffset].dstAddress = getPeripheralPhysAddress((i > 0) ? setReg : clrReg);
+                    dmaCb[cbOffset].nextCbAddress = getMemoryPhysAddress(&dmaCb[cbOffset + 1]);
                     dmaCb[cbOffset].transferLen = sizeof(uint32_t);
                     cbOffset++;
                     if (cbOffset == DMA_BUFFER_SIZE) {
@@ -495,9 +495,9 @@ void GPIOController::pwmCallback()
             }
             if (cbAvailable) {
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
-                dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
-                dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
-                dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                dmaCb[cbOffset].srcAddress = getMemoryPhysAddress(&bitMask[cbOffset]);
+                dmaCb[cbOffset].dstAddress = getPeripheralPhysAddress(&pwm->fifoIn);
+                dmaCb[cbOffset].nextCbAddress = getMemoryPhysAddress(&dmaCb[cbOffset + 1]);
                 dmaCb[cbOffset].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
                 cbOffset++;
             } else {
@@ -507,13 +507,13 @@ void GPIOController::pwmCallback()
             lastComplete = cbOffset;
             offset++;
         }
-        dmaCb[cbOffset - 1].nextCbAddress = getMemoryAddress(dmaCb);
+        dmaCb[cbOffset - 1].nextCbAddress = getMemoryPhysAddress(dmaCb);
 
-        volatile DMARegisters *dma = (DMARegisters *)getPeripheral((dmaChannel < 15) ? DMA0_BASE_OFFSET + dmaChannel * 0x100 : DMA15_BASE_OFFSET);
+        volatile DMARegisters *dma = reinterpret_cast<DMARegisters *>(getPeripheralVirtAddress((dmaChannel < 15) ? DMA0_BASE_OFFSET + dmaChannel * 0x100 : DMA15_BASE_OFFSET));
         dma->ctlStatus = (0x01 << 31);
         usleep(1000);
         dma->ctlStatus = (0x01 << 2) | (0x01 << 1);
-        dma->cbAddress = getMemoryAddress(dmaCb);
+        dma->cbAddress = getMemoryPhysAddress(dmaCb);
         dma->ctlStatus = (0xFF << 16) | 0x01;
 
         usleep(DMA_BUFFER_SIZE * 250000 / DMA_FREQUENCY);
@@ -537,14 +537,14 @@ void GPIOController::pwmCallback()
                 cbAvailable = true;
                 for (uint8_t i = 0; i < 2; i++) {
                     if (bitMaskSetClr[i]) {
-                        while (cbOffset == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
+                        while (cbOffset == (dma->cbAddress - getMemoryPhysAddress(dmaCb)) / sizeof(DMAControllBlock)) {
                             usleep(1000);
                         }
                         bitMask[cbOffset] = bitMaskSetClr[i];
                         dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
-                        dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
-                        dmaCb[cbOffset].dstAddress = getPeripheralAddress((i > 0) ? setReg : clrReg);
-                        dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                        dmaCb[cbOffset].srcAddress = getMemoryPhysAddress(&bitMask[cbOffset]);
+                        dmaCb[cbOffset].dstAddress = getPeripheralPhysAddress((i > 0) ? setReg : clrReg);
+                        dmaCb[cbOffset].nextCbAddress = getMemoryPhysAddress(&dmaCb[cbOffset + 1]);
                         dmaCb[cbOffset].transferLen = sizeof(uint32_t);
                         cbOffset++;
                         if (cbOffset == DMA_BUFFER_SIZE) {
@@ -554,14 +554,14 @@ void GPIOController::pwmCallback()
                     }
                 }
                 if (cbAvailable) {
-                    while (cbOffset == (dma->cbAddress - getMemoryAddress(dmaCb)) / sizeof(DMAControllBlock)) {
+                    while (cbOffset == (dma->cbAddress - getMemoryPhysAddress(dmaCb)) / sizeof(DMAControllBlock)) {
                         usleep(1000);
                     }
                     bitMask[cbOffset] = 0x00000000;
                     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
-                    dmaCb[cbOffset].srcAddress = getMemoryAddress(&bitMask[cbOffset]);
-                    dmaCb[cbOffset].dstAddress = getPeripheralAddress(&pwm->fifoIn);
-                    dmaCb[cbOffset].nextCbAddress = getMemoryAddress(&dmaCb[cbOffset + 1]);
+                    dmaCb[cbOffset].srcAddress = getMemoryPhysAddress(&bitMask[cbOffset]);
+                    dmaCb[cbOffset].dstAddress = getPeripheralPhysAddress(&pwm->fifoIn);
+                    dmaCb[cbOffset].nextCbAddress = getMemoryPhysAddress(&dmaCb[cbOffset + 1]);
                     dmaCb[cbOffset].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
                     cbOffset++;
                 } else {
@@ -571,7 +571,7 @@ void GPIOController::pwmCallback()
                 lastComplete = cbOffset;
                 offset++;
             }
-            dmaCb[cbOffset - 1].nextCbAddress = getMemoryAddress(dmaCb);
+            dmaCb[cbOffset - 1].nextCbAddress = getMemoryPhysAddress(dmaCb);
         }
 
         dmaCb[cbOffset - 1].nextCbAddress = 0x00000000;
@@ -610,7 +610,7 @@ int main(int argc, char** argv)
             throw std::exception();
         }
 
-        if (setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, (char *)&enable, sizeof(enable)) == -1) {
+        if (setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) == -1) {
             throw std::exception();
         }
 
@@ -619,7 +619,7 @@ int main(int argc, char** argv)
         servAddr.sin_addr.s_addr = htonl(INADDR_ANY);
         servAddr.sin_port = htons(SERVICE_PORT);
 
-        if (bind(socketFd, (struct sockaddr*)&servAddr, sizeof(servAddr)) == -1) {
+        if (bind(socketFd, reinterpret_cast<struct sockaddr*>(&servAddr), sizeof(servAddr)) == -1) {
             close(socketFd);
             throw std::exception();
         }
@@ -634,7 +634,7 @@ int main(int argc, char** argv)
         gpio->setMode(GPIO4, GPIO_MODE_PWM);
 
         while(!stop) {
-            if ((acceptedFd = accept(socketFd, (struct sockaddr*)nullptr, nullptr)) == -1) {
+            if ((acceptedFd = accept(socketFd, nullptr, nullptr)) == -1) {
                 usleep(1000);
                 continue;
             }
