@@ -38,6 +38,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <iostream>
+#include <cstring>
 #include <thread>
 
 #define PERIPHERALS_BASE 0x7E000000
@@ -428,7 +429,7 @@ void GPIOController::pwmCallback()
 {
     if (allocateMemory(DMA_BUFFER_SIZE * sizeof(DMAControllBlock) + DMA_BUFFER_SIZE * sizeof(uint32_t))) {
         PWM *pwmInfo = new PWM[GPIO_COUNT];
-        memset(pwmInfo, 0, sizeof(PWM) * GPIO_COUNT);
+        std::memset(pwmInfo, 0, sizeof(PWM) * GPIO_COUNT);
         for (uint8_t i = 0; i < GPIO_COUNT; i++) {
             pwmInfo[i].gpio = &gpio[i];
         }
@@ -453,8 +454,8 @@ void GPIOController::pwmCallback()
         volatile uint32_t *bitMask = reinterpret_cast<uint32_t *>(reinterpret_cast<uint32_t>(dmaCb) + DMA_BUFFER_SIZE * sizeof(DMAControllBlock));
 
         uint32_t cbOffset = 0;
-        memset(const_cast<DMAControllBlock *>(dmaCb), 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
-        memset(const_cast<uint32_t *>(bitMask), 0, sizeof(uint32_t) * DMA_BUFFER_SIZE);
+        std::memset(const_cast<DMAControllBlock *>(dmaCb), 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
+        std::memset(const_cast<uint32_t *>(bitMask), 0, sizeof(uint32_t) * DMA_BUFFER_SIZE);
         dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
         dmaCb[cbOffset].srcAddress = getMemoryPhysAddress(&bitMask[cbOffset]);
         dmaCb[cbOffset].dstAddress = getPeripheralPhysAddress(&pwm->fifoIn);
@@ -521,7 +522,7 @@ void GPIOController::pwmCallback()
         while (pwmEnabled) {
             cbOffset = 0;
             while (cbOffset < DMA_BUFFER_SIZE) {
-                memset(bitMaskSetClr, 0, sizeof(uint32_t) * 2);
+                std::memset(bitMaskSetClr, 0, sizeof(uint32_t) * 2);
                 for (uint8_t i = 0; i < GPIO_COUNT; i++) {
                     if ((pwmInfo[i].gpio->mode == GPIO_MODE_PWM) && ((offset == pwmInfo[i].start) || !pwmInfo[i].enabled)) {
                         pwmInfo[i].enabled = true;
@@ -614,7 +615,7 @@ int main(int argc, char** argv)
             throw std::exception();
         }
 
-        memset(&servAddr, 0, sizeof(servAddr));
+        std::memset(&servAddr, 0, sizeof(servAddr));
         servAddr.sin_family = AF_INET;
         servAddr.sin_addr.s_addr = htonl(INADDR_ANY);
         servAddr.sin_port = htons(SERVICE_PORT);
@@ -638,8 +639,8 @@ int main(int argc, char** argv)
                 usleep(1000);
                 continue;
             }
-            memset(readBuff, 0, sizeof(readBuff));
-            memset(sendBuff, 0, sizeof(sendBuff));
+            std::memset(readBuff, 0, sizeof(readBuff));
+            std::memset(sendBuff, 0, sizeof(sendBuff));
             if (read(acceptedFd, readBuff, sizeof(readBuff)) == -1) {
                 close(acceptedFd);
                 continue;
