@@ -41,7 +41,7 @@
 #include <cstring>
 #include <thread>
 
-#define PERIPHERALS_BASE 0x7E000000
+#define PERIPHERALS_PHYS_BASE 0x7E000000
 #define BCM2835_PERIPHERALS_VIRT_BASE 0x20000000
 #define BCM2838_PERIPHERALS_VIRT_BASE 0xFE000000
 #define GPIO_FSEL_BASE_OFFSET 0x00200000
@@ -282,7 +282,7 @@ uint32_t GPIOController::getMemoryPhysAddress(volatile void *object)
 }
 
 uint32_t GPIOController::getPeripheralPhysAddress(volatile void *object) {
-    return PERIPHERALS_BASE + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(peripherals));
+    return PERIPHERALS_PHYS_BASE + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(peripherals));
 }
 
 uint32_t GPIOController::getPeripheralVirtAddress(uint32_t offset) {
