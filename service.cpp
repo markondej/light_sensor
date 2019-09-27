@@ -40,6 +40,7 @@
 #include <iostream>
 #include <cstring>
 #include <thread>
+#include <chrono>
 
 #define PERIPHERALS_PHYS_BASE 0x7E000000
 #define BCM2835_PERIPHERALS_VIRT_BASE 0x20000000
@@ -386,9 +387,9 @@ void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
 void GPIOController::setPullUd(uint8_t gpioNo, uint32_t type) {
     select(gpioNo);
     pud->ctl = type;
-    usleep(100);
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
     pud->clock0 = 0x01 << gpioNo;
-    usleep(100);
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
     pud->ctl = 0x00000000;
     pud->clock0 = 0x00000000;
 }
@@ -428,16 +429,16 @@ void GPIOController::pwmCallback()
 
     volatile ClockRegisters *pwmClk = reinterpret_cast<ClockRegisters *>(getPeripheralVirtAddress(PWMCLK_BASE_OFFSET));
     pwmClk->ctl = (0x5A << 24) | 0x06;
-    usleep(1000);
+    std::this_thread::sleep_for(std::chrono::microseconds(1000));
     pwmClk->div = (0x5A << 24) | static_cast<uint32_t>(getSourceFreq() * (0x01 << 12) / (PWM_CHANNEL_RANGE * PWM_WRITES_PER_CYCLE * DMA_FREQUENCY / 1000000.f));
     pwmClk->ctl = (0x5A << 24) | (0x01 << 4) | 0x06;
 
     volatile PWMRegisters *pwm = reinterpret_cast<PWMRegisters *>(getPeripheralVirtAddress(PWM_BASE_OFFSET));
     pwm->ctl = 0x00;
-    usleep(1000);
+    std::this_thread::sleep_for(std::chrono::microseconds(1000));
     pwm->status = 0x01FC;
     pwm->ctl = (0x01 << 6);
-    usleep(1000);
+    std::this_thread::sleep_for(std::chrono::microseconds(1000));
     pwm->chn1Range = PWM_CHANNEL_RANGE;
     pwm->dmaConf = (0x01 << 31) | 0x0707;
     pwm->ctl = (0x01 << 5) | (0x01 << 2) | 0x01;
@@ -464,8 +465,8 @@ void GPIOController::pwmCallback()
         for (uint8_t i = 0; i < GPIO_COUNT; i++) {
             if ((gpio[i].mode == GPIO_MODE_PWM) && (offset == pwmInfo[i].start)) {
                 pwmInfo[i].enabled = true;
-				pwmInfo[i].start = static_cast<uint64_t>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmPeriod) / 1000.);
-				pwmInfo[i].end = static_cast<uint64_t>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmWidth) / 1000.);
+                pwmInfo[i].start = static_cast<uint64_t>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmPeriod) / 1000.);
+                pwmInfo[i].end = static_cast<uint64_t>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmWidth) / 1000.);
                 bitMaskSetClr[(pwmInfo[i].end != offset) ? 1 : 0] |= 0x01 << i;
             } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled && (pwmInfo[i].end != pwmInfo[i].start)) {
                 bitMaskSetClr[0] |= 0x01 << i;
@@ -505,12 +506,12 @@ void GPIOController::pwmCallback()
 
     volatile DMARegisters *dma = reinterpret_cast<DMARegisters *>(getPeripheralVirtAddress((dmaChannel < 15) ? DMA0_BASE_OFFSET + dmaChannel * 0x100 : DMA15_BASE_OFFSET));
     dma->ctlStatus = (0x01 << 31);
-    usleep(1000);
+    std::this_thread::sleep_for(std::chrono::microseconds(1000));
     dma->ctlStatus = (0x01 << 2) | (0x01 << 1);
     dma->cbAddress = getMemoryPhysAddress(dmaCb);
     dma->ctlStatus = (0xFF << 16) | 0x01;
 
-    usleep(DMA_BUFFER_SIZE * 250000 / DMA_FREQUENCY);
+    std::this_thread::sleep_for(std::chrono::microseconds(DMA_BUFFER_SIZE * 250000 / DMA_FREQUENCY));
 
     while (pwmEnabled) {
         cbOffset = 0;
@@ -532,7 +533,7 @@ void GPIOController::pwmCallback()
             for (uint8_t i = 0; i < 2; i++) {
                 if (bitMaskSetClr[i]) {
                     while (cbOffset == (dma->cbAddress - getMemoryPhysAddress(dmaCb)) / sizeof(DMAControllBlock)) {
-                        usleep(1000);
+                        std::this_thread::sleep_for(std::chrono::microseconds(1000));
                     }
                     bitMask[cbOffset] = bitMaskSetClr[i];
                     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
@@ -549,7 +550,7 @@ void GPIOController::pwmCallback()
             }
             if (cbAvailable) {
                 while (cbOffset == (dma->cbAddress - getMemoryPhysAddress(dmaCb)) / sizeof(DMAControllBlock)) {
-                    usleep(1000);
+                    std::this_thread::sleep_for(std::chrono::microseconds(1000));
                 }
                 bitMask[cbOffset] = 0x00000000;
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
@@ -570,7 +571,7 @@ void GPIOController::pwmCallback()
 
     dmaCb[cbOffset - 1].nextCbAddress = 0x00000000;
     while (dma->cbAddress != 0x00000000) {
-        usleep(1000);
+        std::this_thread::sleep_for(std::chrono::microseconds(1000));
     }
 
     dma->ctlStatus = (0x01 << 31);
@@ -626,7 +627,7 @@ int main(int argc, char** argv)
 
         while (!stop) {
             if ((acceptedFd = accept(socketFd, nullptr, nullptr)) == -1) {
-                usleep(1000);
+                std::this_thread::sleep_for(std::chrono::microseconds(1000));
                 continue;
             }
             std::memset(readBuff, 0, sizeof(readBuff));
