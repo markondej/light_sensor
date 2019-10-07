@@ -172,8 +172,9 @@ class GPIOController
 {
     public:
         virtual ~GPIOController();
-        GPIOController(const GPIOController &source) = delete;
-        GPIOController &operator=(const GPIOController &source) = delete;
+        GPIOController(const GPIOController &) = delete;
+        GPIOController(GPIOController &&) = delete;
+        GPIOController &operator=(const GPIOController &) = delete;
         static GPIOController &getInstance();
         static void setDmaChannel(uint8_t dmaChannel);
         void setMode(uint8_t gpioNo, uint8_t mode);
