@@ -171,7 +171,7 @@ struct PWM {
 class GPIOController
 {
     public:
-        virtual ~GPIOController();
+        ~GPIOController();
         GPIOController(const GPIOController &) = delete;
         GPIOController(GPIOController &&) = delete;
         GPIOController &operator=(const GPIOController &) = delete;
