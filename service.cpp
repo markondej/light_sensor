@@ -171,7 +171,7 @@ struct PWM {
 class GPIOController
 {
     public:
-        virtual ~GPIOController();
+        ~GPIOController();
         GPIOController(const GPIOController &) = delete;
         GPIOController(GPIOController &&) = delete;
         GPIOController &operator=(const GPIOController &) = delete;
@@ -181,10 +181,10 @@ class GPIOController
         void setPullUd(uint8_t gpioNo, uint32_t type);
         void setPwm(uint8_t gpioNo, float period, float width);
         void set(uint8_t gpioNo, bool high);
-        bool get(uint8_t gpioNo);
+        bool get(uint8_t gpioNo) const;
     private:
         GPIOController();
-        GPIO *select(uint8_t gpioNo);
+        GPIO *select(uint8_t gpioNo) const;
         static void pwmCallback();
         static float getSourceFreq();
         static uint32_t getMemoryPhysAddress(volatile void *object);
@@ -263,7 +263,8 @@ GPIOController &GPIOController::getInstance()
     return instance;
 }
 
-void GPIOController::setDmaChannel(uint8_t channel) {
+void GPIOController::setDmaChannel(uint8_t channel)
+{
     if (channel > 15) {
         throw std::runtime_error("Selected DMA channel is not supported");
     }
@@ -275,11 +276,13 @@ uint32_t GPIOController::getMemoryPhysAddress(volatile void *object)
     return (memSize) ? memAddress + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(memAllocated)) : 0x00000000;
 }
 
-uint32_t GPIOController::getPeripheralPhysAddress(volatile void *object) {
+uint32_t GPIOController::getPeripheralPhysAddress(volatile void *object)
+{
     return PERIPHERALS_PHYS_BASE + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(peripherals));
 }
 
-uint32_t GPIOController::getPeripheralVirtAddress(uint32_t offset) {
+uint32_t GPIOController::getPeripheralVirtAddress(uint32_t offset)
+{
     return reinterpret_cast<uint32_t>(peripherals) + offset;
 }
 
@@ -336,7 +339,7 @@ float GPIOController::getSourceFreq()
     return (getPeripheralsVirtBaseAddress() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PLLD_FREQ : BCM2835_PLLD_FREQ;
 }
 
-GPIO *GPIOController::select(uint8_t gpioNo)
+GPIO *GPIOController::select(uint8_t gpioNo) const
 {
     if (gpioNo >= GPIO_COUNT) {
         throw std::runtime_error("Selected GPIO is not supported");
@@ -413,7 +416,7 @@ void GPIOController::set(uint8_t gpioNo, bool high)
     }
 }
 
-bool GPIOController::get(uint8_t gpioNo)
+bool GPIOController::get(uint8_t gpioNo) const
 {
     GPIO *selected = select(gpioNo);
     if (selected->mode != GPIO_MODE_PWM) {
