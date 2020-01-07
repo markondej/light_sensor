@@ -68,14 +68,6 @@
 #define PAGE_SIZE 4096
 #define GPIO_COUNT 28
 
-#define GPIO_MODE_IN 0
-#define GPIO_MODE_OUT 1
-#define GPIO_MODE_PWM 2
-#define GPIO_MODE_UNKNOWN 3
-
-#define GPIO_PULL_UP 0x02
-#define GPIO_PULL_DOWN 0x01
-
 #define GPIO0 0
 #define GPIO1 1
 #define GPIO2 2
@@ -159,47 +151,58 @@ struct DMARegisters {
 struct GPIO {
     volatile uint32_t *fnselReg;
     uint32_t fnselBit;
-    uint8_t mode;
+    GPIOController::Mode mode;
     float pwmPeriod, pwmWidth;
 };
 
 struct PWM {
-    uint64_t start, end;
+    unsigned long long start, end;
     bool enabled;
 };
 
 class GPIOController
 {
     public:
+        enum class Mode {
+            IN,
+            OUT,
+            PWM
+        };
+
+        enum class Resistor {
+            PULL_UP,
+            PULL_DOWN
+        };
+
         ~GPIOController();
         GPIOController(const GPIOController &) = delete;
         GPIOController(GPIOController &&) = delete;
         GPIOController &operator=(const GPIOController &) = delete;
         static GPIOController &getInstance();
-        static void setDmaChannel(uint8_t dmaChannel);
-        void setMode(uint8_t gpioNo, uint8_t mode);
-        void setPullUd(uint8_t gpioNo, uint32_t type);
-        void setPwm(uint8_t gpioNo, float period, float width);
-        void set(uint8_t gpioNo, bool high);
-        bool get(uint8_t gpioNo) const;
+        static void setDmaChannel(unsigned channel);
+        void setMode(unsigned gpio, Mode mode);
+        void setResistor(unsigned gpio, Resistor resistor);
+        void setPwm(unsigned gpio, float period, float width);
+        void set(unsigned gpio, bool high);
+        bool get(unsigned gpio) const;
     private:
         GPIOController();
-        GPIO *select(uint8_t gpioNo) const;
+        GPIO *select(unsigned gpio) const;
         static void pwmCallback();
         static float getSourceFreq();
         static uint32_t getMemoryPhysAddress(volatile void *object);
         static uint32_t getPeripheralPhysAddress(volatile void *object);
         static uint32_t getPeripheralVirtAddress(uint32_t offset);
         static uint32_t getPeripheralsVirtBaseAddress();
-        static uint32_t getPeripheralsSize();
-        static bool allocateMemory(uint32_t size);
+        static unsigned getPeripheralsSize();
+        static bool allocateMemory(unsigned size);
         static void freeMemory();
 
         static void *peripherals;
         static GPIO gpio[GPIO_COUNT];
         static bool pwmEnabled;
-        static uint8_t dmaChannel;
-        static uint32_t memSize, memAddress, memHandle;
+        static unsigned dmaChannel, memSize, memHandle;
+        static uint32_t memAddress;
         static volatile uint32_t *setReg, *clrReg;
         volatile uint32_t *levelReg;
         volatile GPIOPullUpDownRegisters *pud;
@@ -212,8 +215,8 @@ class GPIOController
 void *GPIOController::peripherals = nullptr;
 GPIO GPIOController::gpio[GPIO_COUNT];
 bool GPIOController::pwmEnabled = false;
-uint8_t GPIOController::dmaChannel = 0;
-uint32_t GPIOController::memSize = 0, GPIOController::memAddress, GPIOController::memHandle;
+unsigned GPIOController::dmaChannel = 0, GPIOController::memSize = 0, GPIOController::memHandle;
+uint32_t GPIOController::memAddress;
 volatile uint32_t *GPIOController::setReg, *GPIOController::clrReg;
 void *GPIOController::memAllocated;
 int GPIOController::mBoxFd;
@@ -236,11 +239,11 @@ GPIOController::GPIOController()
     levelReg = reinterpret_cast<uint32_t *>(getPeripheralVirtAddress(GPIO_LEVEL0_OFFSET));
     pud = reinterpret_cast<GPIOPullUpDownRegisters *>(getPeripheralVirtAddress(GPIO_PUDCTL_OFFSET));
 
-    for (uint8_t i = 0; i < GPIO_COUNT; i++) {
+    for (unsigned i = 0; i < GPIO_COUNT; i++) {
         gpio[i] = {
             reinterpret_cast<uint32_t *>(getPeripheralVirtAddress(GPIO_FSEL_BASE_OFFSET + i * 3 / 30 * sizeof(uint32_t))),
-            ((uint32_t)i * 3) % 30,
-            GPIO_MODE_UNKNOWN,
+            ((i * 3) % 30,
+            GPIOController::Mode::OUT,
             20.f,
             1.f
         };
@@ -263,7 +266,7 @@ GPIOController &GPIOController::getInstance()
     return instance;
 }
 
-void GPIOController::setDmaChannel(uint8_t channel)
+void GPIOController::setDmaChannel(unsigned channel)
 {
     if (channel > 15) {
         throw std::runtime_error("Selected DMA channel is not supported");
@@ -291,16 +294,16 @@ uint32_t GPIOController::getPeripheralsVirtBaseAddress()
     return (bcm_host_get_peripheral_size() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PERIPHERALS_VIRT_BASE : bcm_host_get_peripheral_address();
 }
 
-uint32_t GPIOController::getPeripheralsSize()
+unsigned GPIOController::getPeripheralsSize()
 {
-    uint32_t size = bcm_host_get_peripheral_size();
+    unsigned size = bcm_host_get_peripheral_size();
     if (size == BCM2838_PERIPHERALS_VIRT_BASE) {
         size = 0x01000000;
     }
     return size;
 }
 
-bool GPIOController::allocateMemory(uint32_t size)
+bool GPIOController::allocateMemory(unsigned size)
 {
     if (memSize) {
         return false;
@@ -339,43 +342,37 @@ float GPIOController::getSourceFreq()
     return (getPeripheralsVirtBaseAddress() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PLLD_FREQ : BCM2835_PLLD_FREQ;
 }
 
-GPIO *GPIOController::select(uint8_t gpioNo) const
+GPIO *GPIOController::select(unsigned gpio) const
 {
-    if (gpioNo >= GPIO_COUNT) {
+    if (gpio >= GPIO_COUNT) {
         throw std::runtime_error("Selected GPIO is not supported");
     }
-    return &gpio[gpioNo];
+    return &this->gpio[gpio];
 }
 
-void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
+void GPIOController::setMode(unsigned gpio, GPIOController::Mode mode)
 {
-    GPIO *selected = select(gpioNo);
+    GPIO *selected = select(gpio);
     selected->mode = mode;
     uint8_t func;
     switch (mode) {
-        case GPIO_MODE_IN:
+        case GPIOController::Mode::IN:
             func = 0x00;
             break;
-        case GPIO_MODE_OUT:
-            func = 0x01;
-            break;
-        case GPIO_MODE_PWM:
-            func = 0x01;
-            break;
         default:
-            throw std::runtime_error("Selected mode is not supported");
+            func = 0x01;
     }
     uint32_t fnsel = *selected->fnselReg & ((0xFFFFFFF8 << selected->fnselBit) | (0xFFFFFFFF >> (32 - selected->fnselBit)));
     *selected->fnselReg = fnsel | (func << selected->fnselBit);
-    if (mode == GPIO_MODE_PWM) {
+    if (mode == GPIOController::Mode::PWM) {
         if (!pwmEnabled) {
             pwmEnabled = true;
             pwmThread = new std::thread(GPIOController::pwmCallback);
         }
     } else if (pwmEnabled) {
         bool stop = true;
-        for (uint8_t i = 0; i < GPIO_COUNT; i++) {
-            if ((selected != &gpio[i]) && (gpio[i].mode == GPIO_MODE_PWM)) {
+        for (unsigned i = 0; i < GPIO_COUNT; i++) {
+            if ((selected != &gpio[i]) && (gpio[i].mode == GPIOController::Mode::PWM)) {
                 stop = false;
                 break;
             }
@@ -388,39 +385,46 @@ void GPIOController::setMode(uint8_t gpioNo, uint8_t mode)
     }
 }
 
-void GPIOController::setPullUd(uint8_t gpioNo, uint32_t type) {
-    select(gpioNo);
+void GPIOController::setRegister(unsigned gpio, GPIOController::Resistor resistor) {
+    select(gpio);
+    switch (resistor) {
+        case GPIOController::Resistor::PULL_DOWN:
+            func = 0x01;
+            break;
+        default:
+            func = 0x02;
+    }
     pud->ctl = type;
     std::this_thread::sleep_for(std::chrono::microseconds(100));
-    pud->clock0 = 0x01 << gpioNo;
+    pud->clock0 = 0x01 << gpio;
     std::this_thread::sleep_for(std::chrono::microseconds(100));
     pud->ctl = 0x00000000;
     pud->clock0 = 0x00000000;
 }
 
-void GPIOController::setPwm(uint8_t gpioNo, float period, float width)
+void GPIOController::setPwm(unsigned gpio, float period, float width)
 {
     if ((period > 0.f) && (width >= 0.f) && (width <= period)) {
-        GPIO *selected = select(gpioNo);
+        GPIO *selected = select(gpio);
         selected->pwmPeriod = period;
         selected->pwmWidth = width;
     }
 }
 
-void GPIOController::set(uint8_t gpioNo, bool high)
+void GPIOController::set(unsigned gpio, bool high)
 {
-    GPIO *selected = select(gpioNo);
-    if (selected->mode != GPIO_MODE_PWM) {
+    GPIO *selected = select(gpio);
+    if (selected->mode != GPIOController::Mode::PWM) {
         volatile uint32_t *reg = high ? setReg : clrReg;
-        *reg = 0x01 << gpioNo;
+        *reg = 0x01 << gpio;
     }
 }
 
-bool GPIOController::get(uint8_t gpioNo) const
+bool GPIOController::get(unsigned gpio) const
 {
-    GPIO *selected = select(gpioNo);
-    if (selected->mode != GPIO_MODE_PWM) {
-        return (bool)(*levelReg & (0x01 << gpioNo));
+    GPIO *selected = select(gpio);
+    if (selected->mode != GPIOController::Mode::PWM) {
+        return (bool)(*levelReg & (0x01 << gpio));
     }
     return false;
 }
@@ -450,7 +454,7 @@ void GPIOController::pwmCallback()
     volatile DMAControllBlock *dmaCb = reinterpret_cast<DMAControllBlock *>(memAllocated);
     volatile uint32_t *bitMask = reinterpret_cast<uint32_t *>(reinterpret_cast<uint32_t>(dmaCb) + DMA_BUFFER_SIZE * sizeof(DMAControllBlock));
 
-    uint32_t cbOffset = 0;
+    unsigned cbOffset = 0;
     std::memset(const_cast<DMAControllBlock *>(dmaCb), 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
     std::memset(const_cast<uint32_t *>(bitMask), 0, sizeof(uint32_t) * DMA_BUFFER_SIZE);
     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
@@ -461,23 +465,25 @@ void GPIOController::pwmCallback()
     cbOffset++;
 
     PWM pwmInfo[GPIO_COUNT];
+
     bool cbAvailable;
-    uint64_t offset = 0;
-    uint32_t bitMaskSetClr[2], lastComplete = cbOffset;
+    uint32_t bitMaskSetClr[2];
+    unsigned long long offset = 0;
+    unsigned lastComplete = cbOffset;
     while (cbOffset < DMA_BUFFER_SIZE) {
         memset(bitMaskSetClr, 0, sizeof(uint32_t) * 2);
-        for (uint8_t i = 0; i < GPIO_COUNT; i++) {
-            if ((gpio[i].mode == GPIO_MODE_PWM) && (offset == pwmInfo[i].start)) {
+        for (unsigned i = 0; i < GPIO_COUNT; i++) {
+            if ((gpio[i].mode == GPIOController::Mode::PWM) && (offset == pwmInfo[i].start)) {
                 pwmInfo[i].enabled = true;
-                pwmInfo[i].start = static_cast<uint64_t>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmPeriod) / 1000.);
-                pwmInfo[i].end = static_cast<uint64_t>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmWidth) / 1000.);
+                pwmInfo[i].start = static_cast<unsigned long long>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmPeriod) / 1000.);
+                pwmInfo[i].end = static_cast<unsigned long long>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmWidth) / 1000.);
                 bitMaskSetClr[(pwmInfo[i].end != offset) ? 1 : 0] |= 0x01 << i;
             } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled && (pwmInfo[i].end != pwmInfo[i].start)) {
                 bitMaskSetClr[0] |= 0x01 << i;
             }
         }
         cbAvailable = true;
-        for (uint8_t i = 0; i < 2; i++) {
+        for (unsigned i = 0; i < 2; i++) {
             if (bitMaskSetClr[i]) {
                 bitMask[cbOffset] = bitMaskSetClr[i];
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
@@ -521,20 +527,20 @@ void GPIOController::pwmCallback()
         cbOffset = 0;
         while (cbOffset < DMA_BUFFER_SIZE) {
             std::memset(bitMaskSetClr, 0, sizeof(uint32_t) * 2);
-            for (uint8_t i = 0; i < GPIO_COUNT; i++) {
-                if ((gpio[i].mode == GPIO_MODE_PWM) && ((offset == pwmInfo[i].start) || !pwmInfo[i].enabled)) {
+            for (unsigned i = 0; i < GPIO_COUNT; i++) {
+                if ((gpio[i].mode == GPIOController::Mode::PWM) && ((offset == pwmInfo[i].start) || !pwmInfo[i].enabled)) {
                     pwmInfo[i].enabled = true;
-                    pwmInfo[i].start = static_cast<uint64_t>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmPeriod) / 1000.);
-                    pwmInfo[i].end = static_cast<uint64_t>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmWidth) / 1000.);
+                    pwmInfo[i].start = static_cast<unsigned long long>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmPeriod) / 1000.);
+                    pwmInfo[i].end = static_cast<unsigned long long>(offset + DMA_FREQUENCY * static_cast<double>(gpio[i].pwmWidth) / 1000.);
                     bitMaskSetClr[(pwmInfo[i].end != offset) ? 1 : 0] |= 0x01 << i;
                 } else if ((offset == pwmInfo[i].end) && pwmInfo[i].enabled && (pwmInfo[i].end != pwmInfo[i].start)) {
                     bitMaskSetClr[0] |= 0x01 << i;
-                } else if ((gpio[i].mode != GPIO_MODE_PWM) && (offset == pwmInfo[i].start) && pwmInfo[i].enabled) {
+                } else if ((gpio[i].mode != GPIOController::Mode::PWM) && (offset == pwmInfo[i].start) && pwmInfo[i].enabled) {
                     pwmInfo[i].enabled = false;
                 }
             }
             cbAvailable = true;
-            for (uint8_t i = 0; i < 2; i++) {
+            for (unsigned i = 0; i < 2; i++) {
                 if (bitMaskSetClr[i]) {
                     while (cbOffset == (dma->cbAddress - getMemoryPhysAddress(dmaCb)) / sizeof(DMAControllBlock)) {
                         std::this_thread::sleep_for(std::chrono::microseconds(1000));
@@ -627,7 +633,7 @@ int main(int argc, char** argv)
 
         GPIOController *gpio = &GPIOController::getInstance();
         gpio->setPwm(GPIO4, 20.f, 1.f);
-        gpio->setMode(GPIO4, GPIO_MODE_PWM);
+        gpio->setMode(GPIO4, GPIOController::Mode::PWM);
 
         while (!stop) {
             if ((acceptedFd = accept(socketFd, nullptr, nullptr)) == -1) {
@@ -657,7 +663,7 @@ int main(int argc, char** argv)
             close(acceptedFd);
         }
 
-        gpio->setMode(GPIO4, GPIO_MODE_OUT);
+        gpio->setMode(GPIO4, GPIOController::Mode::OUT);
         gpio->set(GPIO4, false);
 
         close(socketFd);
