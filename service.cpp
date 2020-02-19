@@ -148,6 +148,8 @@ struct DMARegisters {
     uint32_t debug;
 };
 
+class GPIOController;
+
 struct GPIO {
     volatile uint32_t *fnselReg;
     uint32_t fnselBit;
@@ -160,6 +162,73 @@ struct PWM {
     bool enabled;
 };
 
+class Peripherals
+{
+    public:
+        ~Peripherals();
+        Peripherals(const Peripherals &) = delete;
+        Peripherals(Peripherals &&) = delete;
+        Peripherals &operator=(const Peripherals &) = delete;
+        static Peripherals &GetInstance();
+        uint32_t GetPhysicalAddress(volatile void *object) const;
+        uint32_t GetVirtualAddress(uint32_t offset) const;
+        static uint32_t GetVirtualBaseAddress();
+    private:
+        Peripherals();
+        unsigned GetSize();
+
+        void *peripherals;
+};
+
+Peripherals::Peripherals()
+{
+    int memFd;
+    if ((memFd = open("/dev/mem", O_RDWR | O_SYNC)) < 0) {
+        throw std::runtime_error("Cannot open /dev/mem file (permission denied)");
+    }
+
+    peripherals = mmap(nullptr, GetSize(), PROT_READ | PROT_WRITE, MAP_SHARED, memFd, GetVirtualBaseAddress());
+    close(memFd);
+    if (peripherals == MAP_FAILED) {
+        throw std::runtime_error("Cannot obtain access to peripherals (mmap error)");
+    }
+}
+
+Peripherals::~Peripherals()
+{
+    munmap(peripherals, GetSize());
+}
+
+Peripherals &Peripherals::GetInstance()
+{
+    static Peripherals instance;
+    return instance;
+}
+
+uint32_t Peripherals::GetPhysicalAddress(volatile void *object) const
+{
+    return PERIPHERALS_PHYS_BASE + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(peripherals));
+}
+
+uint32_t Peripherals::GetVirtualAddress(uint32_t offset) const
+{
+    return reinterpret_cast<uint32_t>(peripherals) + offset;
+}
+
+uint32_t Peripherals::GetVirtualBaseAddress()
+{
+    return (bcm_host_get_peripheral_size() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PERIPHERALS_VIRT_BASE : bcm_host_get_peripheral_address();
+}
+
+unsigned Peripherals::GetSize()
+{
+    unsigned size = bcm_host_get_peripheral_size();
+    if (size == BCM2838_PERIPHERALS_VIRT_BASE) {
+        size = 0x01000000;
+    }
+    return size;
+}
+
 class AllocatedMemory
 {
     public:
@@ -168,8 +237,8 @@ class AllocatedMemory
         AllocatedMemory(const AllocatedMemory &) = delete;
         AllocatedMemory(AllocatedMemory &&) = delete;
         AllocatedMemory &operator=(const AllocatedMemory &) = delete;
-        uint32_t getPhysicalAddress(volatile void *object);
-        uint32_t getAddress();
+        uint32_t GetPhysicalAddress(volatile void *object) const;
+        uint32_t GetAddress() const;
     private:
         unsigned memSize, memHandle;
         uint32_t memAddress;
@@ -184,7 +253,7 @@ AllocatedMemory::AllocatedMemory(unsigned size)
     if (memSize % PAGE_SIZE) {
         memSize = (memSize / PAGE_SIZE + 1) * PAGE_SIZE;
     }
-    memHandle = mem_alloc(mBoxFd, size, PAGE_SIZE, (getPeripheralsVirtBaseAddress() == BCM2835_PERIPHERALS_VIRT_BASE) ? BCM2835_MEM_FLAG : BCM2838_MEM_FLAG);
+    memHandle = mem_alloc(mBoxFd, size, PAGE_SIZE, (Peripherals::GetVirtualBaseAddress() == BCM2835_PERIPHERALS_VIRT_BASE) ? BCM2835_MEM_FLAG : BCM2838_MEM_FLAG);
     if (!memHandle) {
         mbox_close(mBoxFd);
         memSize = 0;
@@ -204,81 +273,14 @@ AllocatedMemory::~AllocatedMemory()
     memSize = 0;
 }
 
-uint32_t AllocatedMemory::getPhysicalAddress(volatile void *object)
+uint32_t AllocatedMemory::GetPhysicalAddress(volatile void *object) const
 {
     return (memSize) ? memAddress + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(memAllocated)) : 0x00000000;
 }
 
-uint32_t AllocatedMemory::getAddress()
+uint32_t AllocatedMemory::GetAddress() const
 {
     return reinterpret_cast<uint32_t>(memAllocated);
-}
-
-class Peripherals
-{
-    public:
-        ~Peripherals();
-        Peripherals(const Peripherals &) = delete;
-        Peripherals(Peripherals &&) = delete;
-        Peripherals &operator=(const Peripherals &) = delete;
-        static Peripherals &getInstance();
-        uint32_t getPhysicalAddress(volatile void *object);
-        uint32_t getVirtualAddress(uint32_t offset);
-        uint32_t getVirtualBaseAddress();
-    private:
-        Peripherals();
-        unsigned getSize();
-
-        void *peripherals;
-};
-
-Peripherals::Peripherals()
-{
-    int memFd;
-    if ((memFd = open("/dev/mem", O_RDWR | O_SYNC)) < 0) {
-        throw std::runtime_error("Cannot open /dev/mem file (permission denied)");
-    }
-
-    peripherals = mmap(nullptr, getSize(), PROT_READ | PROT_WRITE, MAP_SHARED, memFd, getVirtualBaseAddress());
-    close(memFd);
-    if (peripherals == MAP_FAILED) {
-        throw std::runtime_error("Cannot obtain access to peripherals (mmap error)");
-    }
-}
-
-Peripherals::~Peripherals()
-{
-    munmap(peripherals, getSize());
-}
-
-Peripherals &Peripherals::getInstance()
-{
-    static Peripherals instance;
-    return instance;
-}
-
-uint32_t Peripherals::getPhysicalAddress(volatile void *object)
-{
-    return PERIPHERALS_PHYS_BASE + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(peripherals));
-}
-
-uint32_t Peripherals::getVirtualAddress(uint32_t offset)
-{
-    return reinterpret_cast<uint32_t>(peripherals) + offset;
-}
-
-uint32_t Peripherals::getVirtualBaseAddress()
-{
-    return (bcm_host_get_peripheral_size() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PERIPHERALS_VIRT_BASE : bcm_host_get_peripheral_address();
-}
-
-unsigned Peripherals::getSize()
-{
-    unsigned size = bcm_host_get_peripheral_size();
-    if (size == BCM2838_PERIPHERALS_VIRT_BASE) {
-        size = 0x01000000;
-    }
-    return size;
 }
 
 class GPIOController
@@ -299,22 +301,18 @@ class GPIOController
         GPIOController(const GPIOController &) = delete;
         GPIOController(GPIOController &&) = delete;
         GPIOController &operator=(const GPIOController &) = delete;
-        static GPIOController &getInstance();
-        static void setDmaChannel(unsigned channel);
-        void setMode(unsigned gpio, Mode mode);
-        void setResistor(unsigned gpio, Resistor resistor);
-        void setPwm(unsigned gpio, float period, float width);
-        void set(unsigned gpio, bool high);
-        bool get(unsigned gpio) const;
+        static GPIOController &GetInstance();
+        void SetDMAChannel(unsigned channel);
+        void SetMode(unsigned gpio, Mode mode);
+        void SetResistor(unsigned gpio, Resistor resistor);
+        void SetPWM(unsigned gpio, float period, float width);
+        void Set(unsigned gpio, bool high);
+        bool Get(unsigned gpio) const;
     private:
         GPIOController();
         GPIO *select(unsigned gpio) const;
-        static void pwmCallback(GPIOController *instance);
-        uint32_t getPeripheralPhysAddress(volatile void *object);
-        uint32_t getPeripheralVirtAddress(uint32_t offset);
-        uint32_t getPeripheralsVirtBaseAddress();
-        unsigned getPeripheralsSize();
-        float getSourceFreq();
+        static void PWMCallback(GPIOController *instance);
+        float GetSourceFreq();
 
         Peripherals *peripherals;
         GPIO gpio[GPIO_COUNT];
@@ -339,7 +337,7 @@ GPIOController::GPIOController()
 
     for (unsigned i = 0; i < GPIO_COUNT; i++) {
         gpio[i] = {
-            reinterpret_cast<uint32_t *>(peripherals->getVirtualAddress(GPIO_FSEL_BASE_OFFSET + i * 3 / 30 * sizeof(uint32_t))),
+            reinterpret_cast<uint32_t *>(peripherals->GetVirtualAddress(GPIO_FSEL_BASE_OFFSET + i * 3 / 30 * sizeof(uint32_t))),
             ((i * 3) % 30,
             GPIOController::Mode::OUT,
             20.f,
@@ -357,13 +355,13 @@ GPIOController::~GPIOController()
     }
 }
 
-GPIOController &GPIOController::getInstance()
+GPIOController &GPIOController::GetInstance()
 {
     static GPIOController instance;
     return instance;
 }
 
-void GPIOController::setDmaChannel(unsigned channel)
+void GPIOController::SetDMAChannel(unsigned channel)
 {
     if (channel > 15) {
         throw std::runtime_error("Selected DMA channel is not supported");
@@ -371,12 +369,12 @@ void GPIOController::setDmaChannel(unsigned channel)
     dmaChannel = channel;
 }
 
-float GPIOController::getSourceFreq()
+float GPIOController::GetSourceFreq()
 {
     return (getPeripheralsVirtBaseAddress() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PLLD_FREQ : BCM2835_PLLD_FREQ;
 }
 
-GPIO *GPIOController::select(unsigned gpio) const
+GPIO *GPIOController::Select(unsigned gpio) const
 {
     if (gpio >= GPIO_COUNT) {
         throw std::runtime_error("Selected GPIO is not supported");
@@ -384,9 +382,9 @@ GPIO *GPIOController::select(unsigned gpio) const
     return &this->gpio[gpio];
 }
 
-void GPIOController::setMode(unsigned gpio, GPIOController::Mode mode)
+void GPIOController::SetMode(unsigned gpio, GPIOController::Mode mode)
 {
-    GPIO *selected = select(gpio);
+    GPIO *selected = Select(gpio);
     selected->mode = mode;
     uint8_t func;
     switch (mode) {
@@ -401,7 +399,7 @@ void GPIOController::setMode(unsigned gpio, GPIOController::Mode mode)
     if (mode == GPIOController::Mode::PWM) {
         if (!pwmEnabled) {
             pwmEnabled = true;
-            pwmThread = new std::thread(GPIOController::pwmCallback, this);
+            pwmThread = new std::thread(GPIOController::PWMCallback, this);
         }
     } else if (pwmEnabled) {
         bool stop = true;
@@ -419,8 +417,8 @@ void GPIOController::setMode(unsigned gpio, GPIOController::Mode mode)
     }
 }
 
-void GPIOController::setRegister(unsigned gpio, GPIOController::Resistor resistor) {
-    select(gpio);
+void GPIOController::SetRegister(unsigned gpio, GPIOController::Resistor resistor) {
+    Select(gpio);
     switch (resistor) {
         case GPIOController::Resistor::PULL_DOWN:
             func = 0x01;
@@ -436,7 +434,7 @@ void GPIOController::setRegister(unsigned gpio, GPIOController::Resistor resisto
     pud->clock0 = 0x00000000;
 }
 
-void GPIOController::setPwm(unsigned gpio, float period, float width)
+void GPIOController::SetPWM(unsigned gpio, float period, float width)
 {
     if ((period > 0.f) && (width >= 0.f) && (width <= period)) {
         GPIO *selected = select(gpio);
@@ -445,7 +443,7 @@ void GPIOController::setPwm(unsigned gpio, float period, float width)
     }
 }
 
-void GPIOController::set(unsigned gpio, bool high)
+void GPIOController::Set(unsigned gpio, bool high)
 {
     GPIO *selected = select(gpio);
     if (selected->mode != GPIOController::Mode::PWM) {
@@ -454,7 +452,7 @@ void GPIOController::set(unsigned gpio, bool high)
     }
 }
 
-bool GPIOController::get(unsigned gpio) const
+bool GPIOController::Get(unsigned gpio) const
 {
     GPIO *selected = select(gpio);
     if (selected->mode != GPIOController::Mode::PWM) {
@@ -463,7 +461,7 @@ bool GPIOController::get(unsigned gpio) const
     return false;
 }
 
-void GPIOController::pwmCallback(GPIOController *instance)
+void GPIOController::PWMCallback(GPIOController *instance)
 {
     AllocatedMemory allocated(DMA_BUFFER_SIZE * sizeof(DMAControllBlock) + DMA_BUFFER_SIZE * sizeof(uint32_t));
 
@@ -678,16 +676,16 @@ int main(int argc, char** argv)
                 close(acceptedFd);
                 continue;
             }
-            if (strcmp(readBuff, "1\r\n") == 0) {
-                sprintf(sendBuff, "OK:1\r\n");
+            if (strcmp(readBuff, "1") == 0) {
+                sprintf(sendBuff, "OK:1");
                 gpio->setPwm(GPIO4, 20.f, 2.f);
                 std::cout << "Level set: 1" << std::endl;
-            } else if (strcmp(readBuff, "0\r\n") == 0) {
-                sprintf(sendBuff, "OK:0\r\n");
+            } else if (strcmp(readBuff, "0") == 0) {
+                sprintf(sendBuff, "OK:0");
                 gpio->setPwm(GPIO4, 20.f, 1.f);
                 std::cout << "Level set: 0" << std::endl;
             } else {
-                sprintf(sendBuff, "ERROR:VALUE UNKNOWN\r\n");
+                sprintf(sendBuff, "ERROR:VALUE UNKNOWN");
                 std::cout << "Received unknown value" << std::endl;
             }
             write(acceptedFd, sendBuff, strlen(sendBuff));
