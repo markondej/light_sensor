@@ -148,12 +148,14 @@ struct DMARegisters {
     uint32_t debug;
 };
 
-class GPIOController;
+enum class GPIOMode { In, Out, PWM };
+
+enum class GPIOResistor { PullUp, PullDown };
 
 struct GPIO {
     volatile uint32_t *fnselReg;
     uint32_t fnselBit;
-    GPIOController::Mode mode;
+    GPIOMode mode;
     float pwmPeriod, pwmWidth;
 };
 
@@ -286,25 +288,14 @@ uint32_t AllocatedMemory::GetAddress() const
 class GPIOController
 {
     public:
-        enum class Mode {
-            IN,
-            OUT,
-            PWM
-        };
-
-        enum class Resistor {
-            PULL_UP,
-            PULL_DOWN
-        };
-
         ~GPIOController();
         GPIOController(const GPIOController &) = delete;
         GPIOController(GPIOController &&) = delete;
         GPIOController &operator=(const GPIOController &) = delete;
         static GPIOController &GetInstance();
         void SetDMAChannel(unsigned channel);
-        void SetMode(unsigned gpio, Mode mode);
-        void SetResistor(unsigned gpio, Resistor resistor);
+        void SetMode(unsigned gpio, GPIOMode mode);
+        void SetResistor(unsigned gpio, GPIOResistor resistor);
         void SetPWM(unsigned gpio, float period, float width);
         void Set(unsigned gpio, bool high);
         bool Get(unsigned gpio) const;
@@ -328,7 +319,7 @@ class GPIOController
 GPIOController::GPIOController()
     : pwmEnabled(false), dmaChannel(0)
 {
-    peripherals = &Peripherals.getInstance();
+    peripherals = &Peripherals.GetInstance();
 
     setReg = reinterpret_cast<uint32_t *>(peripherals->getVirtualAddress(GPIO_SET0_OFFSET));
     clrReg = reinterpret_cast<uint32_t *>(peripherals->getVirtualAddress(GPIO_CLR0_OFFSET));
@@ -382,13 +373,13 @@ GPIO *GPIOController::Select(unsigned gpio) const
     return &this->gpio[gpio];
 }
 
-void GPIOController::SetMode(unsigned gpio, GPIOController::Mode mode)
+void GPIOController::SetMode(unsigned gpio, GPIOMode mode)
 {
     GPIO *selected = Select(gpio);
     selected->mode = mode;
     uint8_t func;
     switch (mode) {
-        case GPIOController::Mode::IN:
+        case GPIOMode::In:
             func = 0x00;
             break;
         default:
@@ -396,7 +387,7 @@ void GPIOController::SetMode(unsigned gpio, GPIOController::Mode mode)
     }
     uint32_t fnsel = *selected->fnselReg & ((0xFFFFFFF8 << selected->fnselBit) | (0xFFFFFFFF >> (32 - selected->fnselBit)));
     *selected->fnselReg = fnsel | (func << selected->fnselBit);
-    if (mode == GPIOController::Mode::PWM) {
+    if (mode == GPIOMode::PWM) {
         if (!pwmEnabled) {
             pwmEnabled = true;
             pwmThread = new std::thread(GPIOController::PWMCallback, this);
@@ -417,10 +408,11 @@ void GPIOController::SetMode(unsigned gpio, GPIOController::Mode mode)
     }
 }
 
-void GPIOController::SetRegister(unsigned gpio, GPIOController::Resistor resistor) {
+void GPIOController::SetRegister(unsigned gpio, GPIOResistor resistor) const
+{
     Select(gpio);
     switch (resistor) {
-        case GPIOController::Resistor::PULL_DOWN:
+        case GPIOResistor::PullDown:
             func = 0x01;
             break;
         default:
@@ -437,16 +429,16 @@ void GPIOController::SetRegister(unsigned gpio, GPIOController::Resistor resisto
 void GPIOController::SetPWM(unsigned gpio, float period, float width)
 {
     if ((period > 0.f) && (width >= 0.f) && (width <= period)) {
-        GPIO *selected = select(gpio);
+        GPIO *selected = Select(gpio);
         selected->pwmPeriod = period;
         selected->pwmWidth = width;
     }
 }
 
-void GPIOController::Set(unsigned gpio, bool high)
+void GPIOController::Set(unsigned gpio, bool high) const
 {
-    GPIO *selected = select(gpio);
-    if (selected->mode != GPIOController::Mode::PWM) {
+    GPIO *selected = Select(gpio);
+    if (selected->mode != GPIOMode::PWM) {
         volatile uint32_t *reg = high ? setReg : clrReg;
         *reg = 0x01 << gpio;
     }
@@ -454,8 +446,8 @@ void GPIOController::Set(unsigned gpio, bool high)
 
 bool GPIOController::Get(unsigned gpio) const
 {
-    GPIO *selected = select(gpio);
-    if (selected->mode != GPIOController::Mode::PWM) {
+    GPIO *selected = Select(gpio);
+    if (selected->mode != GPIOMode::PWM) {
         return (bool)(*levelReg & (0x01 << gpio));
     }
     return false;
@@ -661,9 +653,9 @@ int main(int argc, char** argv)
             throw std::runtime_error("Cannot start service (listen error)");
         }
 
-        GPIOController *gpio = &GPIOController::getInstance();
-        gpio->setPwm(GPIO4, 20.f, 1.f);
-        gpio->setMode(GPIO4, GPIOController::Mode::PWM);
+        GPIOController *gpio = &GPIOController::GetInstance();
+        gpio->SetPWM(GPIO4, 20.f, 1.f);
+        gpio->SetMode(GPIO4, GPIOMode::PWM);
 
         while (!stop) {
             if ((acceptedFd = accept(socketFd, nullptr, nullptr)) == -1) {
@@ -678,11 +670,11 @@ int main(int argc, char** argv)
             }
             if (strcmp(readBuff, "1") == 0) {
                 sprintf(sendBuff, "OK:1");
-                gpio->setPwm(GPIO4, 20.f, 2.f);
+                gpio->SetPWM(GPIO4, 20.f, 2.f);
                 std::cout << "Level set: 1" << std::endl;
             } else if (strcmp(readBuff, "0") == 0) {
                 sprintf(sendBuff, "OK:0");
-                gpio->setPwm(GPIO4, 20.f, 1.f);
+                gpio->SetPWM(GPIO4, 20.f, 1.f);
                 std::cout << "Level set: 0" << std::endl;
             } else {
                 sprintf(sendBuff, "ERROR:VALUE UNKNOWN");
@@ -693,8 +685,8 @@ int main(int argc, char** argv)
             close(acceptedFd);
         }
 
-        gpio->setMode(GPIO4, GPIOController::Mode::OUT);
-        gpio->set(GPIO4, false);
+        gpio->SetMode(GPIO4, GPIOMode::Out);
+        gpio->Set(GPIO4, false);
 
         close(socketFd);
     } catch (std::exception &error) {
