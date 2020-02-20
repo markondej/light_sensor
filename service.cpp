@@ -537,7 +537,8 @@ void GPIOController::PWMCallback(GPIOController *instance)
     }
     dmaCb[cbOffset - 1].nextCbAddress = allocated.GetPhysicalAddress(dmaCb);
 
-    volatile DMARegisters *dma = reinterpret_cast<DMARegisters *>(peripherals.GetVirtualAddress((instance->dmaChannel < 15) ? DMA0_BASE_OFFSET + instance->dmaChannel * 0x100 : DMA15_BASE_OFFSET));
+    unsigned dmaChannel = instance->dmaChannel;
+    volatile DMARegisters *dma = reinterpret_cast<DMARegisters *>(peripherals.GetVirtualAddress((dmaChannel < 15) ? DMA0_BASE_OFFSET + dmaChannel * 0x100 : DMA15_BASE_OFFSET));
     dma->ctlStatus = (0x01 << 31);
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
     dma->ctlStatus = (0x01 << 2) | (0x01 << 1);
