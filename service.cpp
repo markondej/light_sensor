@@ -654,9 +654,9 @@ int main(int argc, char** argv)
             throw std::runtime_error("Cannot start service (listen error)");
         }
 
-        GPIOController *gpio = &GPIOController::GetInstance();
-        gpio->SetPWM(GPIO4, 20.f, 1.f);
-        gpio->SetMode(GPIO4, GPIOMode::PWM);
+        GPIOController &gpio = GPIOController::GetInstance();
+        gpio.SetPWM(GPIO4, 20.f, 1.f);
+        gpio.SetMode(GPIO4, GPIOMode::PWM);
 
         while (!stop) {
             if ((acceptedFd = accept(socketFd, nullptr, nullptr)) == -1) {
@@ -671,11 +671,11 @@ int main(int argc, char** argv)
             }
             if (strcmp(readBuff, "1") == 0) {
                 sprintf(sendBuff, "OK:1");
-                gpio->SetPWM(GPIO4, 20.f, 2.f);
+                gpio.SetPWM(GPIO4, 20.f, 2.f);
                 std::cout << "Level set: 1" << std::endl;
             } else if (strcmp(readBuff, "0") == 0) {
                 sprintf(sendBuff, "OK:0");
-                gpio->SetPWM(GPIO4, 20.f, 1.f);
+                gpio.SetPWM(GPIO4, 20.f, 1.f);
                 std::cout << "Level set: 0" << std::endl;
             } else {
                 sprintf(sendBuff, "ERROR:VALUE UNKNOWN");
@@ -686,8 +686,8 @@ int main(int argc, char** argv)
             close(acceptedFd);
         }
 
-        gpio->SetMode(GPIO4, GPIOMode::Out);
-        gpio->Set(GPIO4, false);
+        gpio.SetMode(GPIO4, GPIOMode::Out);
+        gpio.Set(GPIO4, false);
 
         close(socketFd);
     } catch (std::exception &error) {
