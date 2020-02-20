@@ -170,7 +170,7 @@ struct PWM {
 class Peripherals
 {
     public:
-        ~Peripherals();
+        virtual ~Peripherals();
         Peripherals(const Peripherals &) = delete;
         Peripherals(Peripherals &&) = delete;
         Peripherals &operator=(const Peripherals &) = delete;
@@ -238,7 +238,7 @@ class AllocatedMemory
 {
     public:
         AllocatedMemory(unsigned size);
-        ~AllocatedMemory();
+        virtual ~AllocatedMemory();
         AllocatedMemory(const AllocatedMemory &) = delete;
         AllocatedMemory(AllocatedMemory &&) = delete;
         AllocatedMemory &operator=(const AllocatedMemory &) = delete;
@@ -291,7 +291,7 @@ uint32_t AllocatedMemory::GetAddress() const
 class GPIOController
 {
     public:
-        ~GPIOController();
+        virtual ~GPIOController();
         GPIOController(const GPIOController &) = delete;
         GPIOController(GPIOController &&) = delete;
         GPIOController &operator=(const GPIOController &) = delete;
