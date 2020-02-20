@@ -1,7 +1,7 @@
 /*
     rpi_gpio_service - Simple Raspberry Pi GPIO control service written in C++
 
-    Copyright (c) 2019, Marcin Kondej
+    Copyright (c) 2020, Marcin Kondej
     All rights reserved.
 
     See https://github.com/markondej/rpi_gpio_service
@@ -39,8 +39,10 @@
 #include <fcntl.h>
 #include <iostream>
 #include <cstring>
+#include <atomic>
 #include <thread>
 #include <chrono>
+#include <mutex>
 
 #define PERIPHERALS_PHYS_BASE 0x7E000000
 #define BCM2835_PERIPHERALS_VIRT_BASE 0x20000000
@@ -157,6 +159,7 @@ struct GPIO {
     uint32_t fnselBit;
     GPIOMode mode;
     float pwmPeriod, pwmWidth;
+    std::mutex access;
 };
 
 struct PWM {
@@ -305,10 +308,9 @@ class GPIOController
         static void PWMCallback(GPIOController *instance);
         static float GetSourceFreq();
 
-        Peripherals *peripherals;
+        std::mutex pwmAccess;
         GPIO gpio[GPIO_COUNT];
-        bool pwmEnabled;
-        unsigned dmaChannel;
+	unsigned pwmOutputs, dmaChannel;
         volatile uint32_t *setReg, *clrReg;
         volatile uint32_t *levelReg;
         volatile GPIOPullUpDownRegisters *pud;
@@ -317,30 +319,28 @@ class GPIOController
 };
 
 GPIOController::GPIOController()
-    : pwmEnabled(false), dmaChannel(0)
+    : pwmOutputs(0), dmaChannel(0)
 {
-    peripherals = &Peripherals::GetInstance();
+    Peripherals &peripherals = Peripherals::GetInstance();
 
-    setReg = reinterpret_cast<uint32_t *>(peripherals->GetVirtualAddress(GPIO_SET0_OFFSET));
-    clrReg = reinterpret_cast<uint32_t *>(peripherals->GetVirtualAddress(GPIO_CLR0_OFFSET));
-    levelReg = reinterpret_cast<uint32_t *>(peripherals->GetVirtualAddress(GPIO_LEVEL0_OFFSET));
-    pud = reinterpret_cast<GPIOPullUpDownRegisters *>(peripherals->GetVirtualAddress(GPIO_PUDCTL_OFFSET));
+    setReg = reinterpret_cast<uint32_t *>(peripherals.GetVirtualAddress(GPIO_SET0_OFFSET));
+    clrReg = reinterpret_cast<uint32_t *>(peripherals.GetVirtualAddress(GPIO_CLR0_OFFSET));
+    levelReg = reinterpret_cast<uint32_t *>(peripherals.GetVirtualAddress(GPIO_LEVEL0_OFFSET));
+    pud = reinterpret_cast<GPIOPullUpDownRegisters *>(peripherals.GetVirtualAddress(GPIO_PUDCTL_OFFSET));
 
     for (unsigned i = 0; i < GPIO_COUNT; i++) {
-        gpio[i] = {
-            reinterpret_cast<uint32_t *>(peripherals->GetVirtualAddress(GPIO_FSEL_BASE_OFFSET + i * 3 / 30 * sizeof(uint32_t))),
-            (i * 3) % 30,
-            GPIOMode::Out,
-            20.f,
-            1.f
-        };
+	gpio[i].fnselReg = reinterpret_cast<uint32_t *>(peripherals.GetVirtualAddress(GPIO_FSEL_BASE_OFFSET + i * 3 / 30 * sizeof(uint32_t)));
+        gpio[i].fnselBit = (i * 3) % 30;
+        gpio[i].mode = GPIOMode::Out;
+        gpio[i].pwmPeriod = 20.f;
+        gpio[i].pwmWidth = 1.f;
     }
 }
 
 GPIOController::~GPIOController()
 {
-    if (pwmEnabled) {
-        pwmEnabled = false;
+    if (pwmOutputs) {
+        pwmOutputs = 0;
         pwmThread->join();
         delete pwmThread;
     }
@@ -376,7 +376,6 @@ GPIO *GPIOController::Select(unsigned gpio)
 void GPIOController::SetMode(unsigned gpio, GPIOMode mode)
 {
     GPIO *selected = Select(gpio);
-    selected->mode = mode;
     uint8_t func;
     switch (mode) {
         case GPIOMode::In:
@@ -385,23 +384,23 @@ void GPIOController::SetMode(unsigned gpio, GPIOMode mode)
         default:
             func = 0x01;
     }
-    uint32_t fnsel = *selected->fnselReg & ((0xFFFFFFF8 << selected->fnselBit) | (0xFFFFFFFF >> (32 - selected->fnselBit)));
-    *selected->fnselReg = fnsel | (func << selected->fnselBit);
+    bool pwmDisable = false;
+    {
+        std::lock_guard<std::mutex> lock(selected->access);
+        pwmDisable = (selected->mode == GPIOMode::PWM) && (mode != GPIOMode::PWM);
+        uint32_t fnsel = *selected->fnselReg & ((0xFFFFFFF8 << selected->fnselBit) | (0xFFFFFFFF >> (32 - selected->fnselBit)));
+        *selected->fnselReg = fnsel | (func << selected->fnselBit);
+        selected->mode = mode;
+    }
     if (mode == GPIOMode::PWM) {
-        if (!pwmEnabled) {
-            pwmEnabled = true;
+        std::lock_guard<std::mutex> lock(pwmAccess);
+        if (!(pwmOutputs++)) {
             pwmThread = new std::thread(GPIOController::PWMCallback, this);
         }
-    } else if (pwmEnabled) {
-        bool stop = true;
-        for (unsigned i = 0; i < GPIO_COUNT; i++) {
-            if ((selected != &this->gpio[i]) && (this->gpio[i].mode == GPIOMode::PWM)) {
-                stop = false;
-                break;
-            }
-        }
-        if (stop) {
-            pwmEnabled = false;
+    } else if (pwmDisable) {
+        std::lock_guard<std::mutex> lock(pwmAccess);
+        pwmOutputs--;
+        if (!pwmOutputs) {
             pwmThread->join();
             delete pwmThread;
         }
@@ -429,6 +428,7 @@ void GPIOController::SetPWM(unsigned gpio, float period, float width)
 {
     if ((period > 0.f) && (width >= 0.f) && (width <= period)) {
         GPIO *selected = Select(gpio);
+        std::lock_guard<std::mutex> lock(selected->access);
         selected->pwmPeriod = period;
         selected->pwmWidth = width;
     }
@@ -437,6 +437,7 @@ void GPIOController::SetPWM(unsigned gpio, float period, float width)
 void GPIOController::Set(unsigned gpio, bool high)
 {
     GPIO *selected = Select(gpio);
+    std::lock_guard<std::mutex> lock(selected->access);
     if (selected->mode != GPIOMode::PWM) {
         volatile uint32_t *reg = high ? setReg : clrReg;
         *reg = 0x01 << gpio;
@@ -446,6 +447,7 @@ void GPIOController::Set(unsigned gpio, bool high)
 bool GPIOController::Get(unsigned gpio)
 {
     GPIO *selected = Select(gpio);
+    std::lock_guard<std::mutex> lock(selected->access);
     if (selected->mode != GPIOMode::PWM) {
         return (bool)(*levelReg & (0x01 << gpio));
     }
@@ -456,13 +458,15 @@ void GPIOController::PWMCallback(GPIOController *instance)
 {
     AllocatedMemory allocated(DMA_BUFFER_SIZE * sizeof(DMAControllBlock) + DMA_BUFFER_SIZE * sizeof(uint32_t));
 
-    volatile ClockRegisters *pwmClk = reinterpret_cast<ClockRegisters *>(instance->peripherals->GetVirtualAddress(PWMCLK_BASE_OFFSET));
+    Peripherals &peripherals = Peripherals::GetInstance();
+
+    volatile ClockRegisters *pwmClk = reinterpret_cast<ClockRegisters *>(peripherals.GetVirtualAddress(PWMCLK_BASE_OFFSET));
     pwmClk->ctl = (0x5A << 24) | 0x06;
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
     pwmClk->div = (0x5A << 24) | static_cast<uint32_t>(GetSourceFreq() * (0x01 << 12) / (PWM_CHANNEL_RANGE * PWM_WRITES_PER_CYCLE * DMA_FREQUENCY / 1000000.f));
     pwmClk->ctl = (0x5A << 24) | (0x01 << 4) | 0x06;
 
-    volatile PWMRegisters *pwm = reinterpret_cast<PWMRegisters *>(instance->peripherals->GetVirtualAddress(PWM_BASE_OFFSET));
+    volatile PWMRegisters *pwm = reinterpret_cast<PWMRegisters *>(peripherals.GetVirtualAddress(PWM_BASE_OFFSET));
     pwm->ctl = 0x00;
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
     pwm->status = 0x01FC;
@@ -480,7 +484,7 @@ void GPIOController::PWMCallback(GPIOController *instance)
     std::memset(const_cast<uint32_t *>(bitMask), 0, sizeof(uint32_t) * DMA_BUFFER_SIZE);
     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
     dmaCb[cbOffset].srcAddress = allocated.GetPhysicalAddress(&bitMask[cbOffset]);
-    dmaCb[cbOffset].dstAddress = instance->peripherals->GetPhysicalAddress(&pwm->fifoIn);
+    dmaCb[cbOffset].dstAddress = peripherals.GetPhysicalAddress(&pwm->fifoIn);
     dmaCb[cbOffset].nextCbAddress = allocated.GetPhysicalAddress(&dmaCb[cbOffset + 1]);
     dmaCb[cbOffset].transferLen = 8 * PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
     cbOffset++;
@@ -494,6 +498,7 @@ void GPIOController::PWMCallback(GPIOController *instance)
     while (cbOffset < DMA_BUFFER_SIZE) {
         memset(bitMaskSetClr, 0, sizeof(uint32_t) * 2);
         for (unsigned i = 0; i < GPIO_COUNT; i++) {
+            std::lock_guard<std::mutex> lock(instance->gpio[i].access);
             if ((instance->gpio[i].mode == GPIOMode::PWM) && (offset == pwmInfo[i].start)) {
                 pwmInfo[i].enabled = true;
                 pwmInfo[i].start = static_cast<unsigned long long>(offset + DMA_FREQUENCY * static_cast<double>(instance->gpio[i].pwmPeriod) / 1000.);
@@ -509,7 +514,7 @@ void GPIOController::PWMCallback(GPIOController *instance)
                 bitMask[cbOffset] = bitMaskSetClr[i];
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
                 dmaCb[cbOffset].srcAddress = allocated.GetPhysicalAddress(&bitMask[cbOffset]);
-                dmaCb[cbOffset].dstAddress = instance->peripherals->GetPhysicalAddress((i > 0) ? instance->setReg : instance->clrReg);
+                dmaCb[cbOffset].dstAddress = peripherals.GetPhysicalAddress((i > 0) ? instance->setReg : instance->clrReg);
                 dmaCb[cbOffset].nextCbAddress = allocated.GetPhysicalAddress(&dmaCb[cbOffset + 1]);
                 dmaCb[cbOffset].transferLen = sizeof(uint32_t);
                 cbOffset++;
@@ -522,7 +527,7 @@ void GPIOController::PWMCallback(GPIOController *instance)
         if (cbAvailable) {
             dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
             dmaCb[cbOffset].srcAddress = allocated.GetPhysicalAddress(&bitMask[cbOffset]);
-            dmaCb[cbOffset].dstAddress = instance->peripherals->GetPhysicalAddress(&pwm->fifoIn);
+            dmaCb[cbOffset].dstAddress = peripherals.GetPhysicalAddress(&pwm->fifoIn);
             dmaCb[cbOffset].nextCbAddress = allocated.GetPhysicalAddress(&dmaCb[cbOffset + 1]);
             dmaCb[cbOffset].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
             cbOffset++;
@@ -535,7 +540,8 @@ void GPIOController::PWMCallback(GPIOController *instance)
     }
     dmaCb[cbOffset - 1].nextCbAddress = allocated.GetPhysicalAddress(dmaCb);
 
-    volatile DMARegisters *dma = reinterpret_cast<DMARegisters *>(instance->peripherals->GetVirtualAddress((instance->dmaChannel < 15) ? DMA0_BASE_OFFSET + instance->dmaChannel * 0x100 : DMA15_BASE_OFFSET));
+    unsigned dmaChannel = instance->dmaChannel;
+    volatile DMARegisters *dma = reinterpret_cast<DMARegisters *>(peripherals.GetVirtualAddress((dmaChannel < 15) ? DMA0_BASE_OFFSET + dmaChannel * 0x100 : DMA15_BASE_OFFSET));
     dma->ctlStatus = (0x01 << 31);
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
     dma->ctlStatus = (0x01 << 2) | (0x01 << 1);
@@ -544,11 +550,12 @@ void GPIOController::PWMCallback(GPIOController *instance)
 
     std::this_thread::sleep_for(std::chrono::microseconds(DMA_BUFFER_SIZE * 250000 / DMA_FREQUENCY));
 
-    while (instance->pwmEnabled) {
+    while (instance->pwmOutputs) {
         cbOffset = 0;
         while (cbOffset < DMA_BUFFER_SIZE) {
             std::memset(bitMaskSetClr, 0, sizeof(uint32_t) * 2);
             for (unsigned i = 0; i < GPIO_COUNT; i++) {
+                std::lock_guard<std::mutex> lock(instance->gpio[i].access);
                 if ((instance->gpio[i].mode == GPIOMode::PWM) && ((offset == pwmInfo[i].start) || !pwmInfo[i].enabled)) {
                     pwmInfo[i].enabled = true;
                     pwmInfo[i].start = static_cast<unsigned long long>(offset + DMA_FREQUENCY * static_cast<double>(instance->gpio[i].pwmPeriod) / 1000.);
@@ -569,7 +576,7 @@ void GPIOController::PWMCallback(GPIOController *instance)
                     bitMask[cbOffset] = bitMaskSetClr[i];
                     dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x01 << 3);
                     dmaCb[cbOffset].srcAddress = allocated.GetPhysicalAddress(&bitMask[cbOffset]);
-                    dmaCb[cbOffset].dstAddress = instance->peripherals->GetPhysicalAddress((i > 0) ? instance->setReg : instance->clrReg);
+                    dmaCb[cbOffset].dstAddress = peripherals.GetPhysicalAddress((i > 0) ? instance->setReg : instance->clrReg);
                     dmaCb[cbOffset].nextCbAddress = allocated.GetPhysicalAddress(&dmaCb[cbOffset + 1]);
                     dmaCb[cbOffset].transferLen = sizeof(uint32_t);
                     cbOffset++;
@@ -586,7 +593,7 @@ void GPIOController::PWMCallback(GPIOController *instance)
                 bitMask[cbOffset] = 0x00000000;
                 dmaCb[cbOffset].transferInfo = (0x01 << 26) | (0x05 << 16) | (0x01 << 6) | (0x01 << 3);
                 dmaCb[cbOffset].srcAddress = allocated.GetPhysicalAddress(&bitMask[cbOffset]);
-                dmaCb[cbOffset].dstAddress = instance->peripherals->GetPhysicalAddress(&pwm->fifoIn);
+                dmaCb[cbOffset].dstAddress = peripherals.GetPhysicalAddress(&pwm->fifoIn);
                 dmaCb[cbOffset].nextCbAddress = allocated.GetPhysicalAddress(&dmaCb[cbOffset + 1]);
                 dmaCb[cbOffset].transferLen = PWM_WRITES_PER_CYCLE * sizeof(uint32_t);
                 cbOffset++;
