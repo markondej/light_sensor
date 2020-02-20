@@ -310,7 +310,7 @@ class GPIOController
 
         std::mutex pwmAccess;
         GPIO gpio[GPIO_COUNT];
-	unsigned pwmOutputs, dmaChannel;
+	std::atomic_uint pwmOutputs, dmaChannel;
         volatile uint32_t *setReg, *clrReg;
         volatile uint32_t *levelReg;
         volatile GPIOPullUpDownRegisters *pud;
@@ -393,14 +393,11 @@ void GPIOController::SetMode(unsigned gpio, GPIOMode mode)
         selected->mode = mode;
     }
     if (mode == GPIOMode::PWM) {
-        std::lock_guard<std::mutex> lock(pwmAccess);
         if (!(pwmOutputs++)) {
             pwmThread = new std::thread(GPIOController::PWMCallback, this);
         }
     } else if (pwmDisable) {
-        std::lock_guard<std::mutex> lock(pwmAccess);
-        pwmOutputs--;
-        if (!pwmOutputs) {
+        if (!(--pwmOutputs)) {
             pwmThread->join();
             delete pwmThread;
         }
@@ -540,8 +537,7 @@ void GPIOController::PWMCallback(GPIOController *instance)
     }
     dmaCb[cbOffset - 1].nextCbAddress = allocated.GetPhysicalAddress(dmaCb);
 
-    unsigned dmaChannel = instance->dmaChannel;
-    volatile DMARegisters *dma = reinterpret_cast<DMARegisters *>(peripherals.GetVirtualAddress((dmaChannel < 15) ? DMA0_BASE_OFFSET + dmaChannel * 0x100 : DMA15_BASE_OFFSET));
+    volatile DMARegisters *dma = reinterpret_cast<DMARegisters *>(peripherals.GetVirtualAddress((instance->dmaChannel < 15) ? DMA0_BASE_OFFSET + instance->dmaChannel * 0x100 : DMA15_BASE_OFFSET));
     dma->ctlStatus = (0x01 << 31);
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
     dma->ctlStatus = (0x01 << 2) | (0x01 << 1);
