@@ -304,7 +304,7 @@ class GPIOController
         bool Get(unsigned gpio);
     private:
         GPIOController();
-        GPIO *Select(unsigned gpio);
+        GPIO &Select(unsigned gpio);
         static void PWMCallback(GPIOController *instance);
         static float GetSourceFreq();
 
@@ -365,17 +365,17 @@ float GPIOController::GetSourceFreq()
     return (Peripherals::GetVirtualBaseAddress() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PLLD_FREQ : BCM2835_PLLD_FREQ;
 }
 
-GPIO *GPIOController::Select(unsigned gpio)
+GPIO &GPIOController::Select(unsigned gpio)
 {
     if (gpio >= GPIO_COUNT) {
         throw std::runtime_error("Selected GPIO is not supported");
     }
-    return &this->gpio[gpio];
+    return this->gpio[gpio];
 }
 
 void GPIOController::SetMode(unsigned gpio, GPIOMode mode)
 {
-    GPIO *selected = Select(gpio);
+    GPIO &selected = Select(gpio);
     uint8_t func;
     switch (mode) {
         case GPIOMode::In:
@@ -386,11 +386,11 @@ void GPIOController::SetMode(unsigned gpio, GPIOMode mode)
     }
     bool pwmDisable = false;
     {
-        std::lock_guard<std::mutex> lock(selected->access);
-        pwmDisable = (selected->mode == GPIOMode::PWM) && (mode != GPIOMode::PWM);
-        uint32_t fnsel = *selected->fnselReg & ((0xFFFFFFF8 << selected->fnselBit) | (0xFFFFFFFF >> (32 - selected->fnselBit)));
-        *selected->fnselReg = fnsel | (func << selected->fnselBit);
-        selected->mode = mode;
+        std::lock_guard<std::mutex> lock(selected.access);
+        pwmDisable = (selected.mode == GPIOMode::PWM) && (mode != GPIOMode::PWM);
+        uint32_t fnsel = *selected.fnselReg & ((0xFFFFFFF8 << selected.fnselBit) | (0xFFFFFFFF >> (32 - selected.fnselBit)));
+        *selected.fnselReg = fnsel | (func << selected.fnselBit);
+        selected.mode = mode;
     }
     if (mode == GPIOMode::PWM) {
         if (!(pwmOutputs++)) {
@@ -424,18 +424,18 @@ void GPIOController::SetResistor(unsigned gpio, GPIOResistor resistor)
 void GPIOController::SetPWM(unsigned gpio, float period, float width)
 {
     if ((period > 0.f) && (width >= 0.f) && (width <= period)) {
-        GPIO *selected = Select(gpio);
-        std::lock_guard<std::mutex> lock(selected->access);
-        selected->pwmPeriod = period;
-        selected->pwmWidth = width;
+        GPIO &selected = Select(gpio);
+        std::lock_guard<std::mutex> lock(selected.access);
+        selected.pwmPeriod = period;
+        selected.pwmWidth = width;
     }
 }
 
 void GPIOController::Set(unsigned gpio, bool high)
 {
-    GPIO *selected = Select(gpio);
-    std::lock_guard<std::mutex> lock(selected->access);
-    if (selected->mode != GPIOMode::PWM) {
+    GPIO &selected = Select(gpio);
+    std::lock_guard<std::mutex> lock(selected.access);
+    if (selected.mode != GPIOMode::PWM) {
         volatile uint32_t *reg = high ? setReg : clrReg;
         *reg = 0x01 << gpio;
     }
@@ -443,9 +443,9 @@ void GPIOController::Set(unsigned gpio, bool high)
 
 bool GPIOController::Get(unsigned gpio)
 {
-    GPIO *selected = Select(gpio);
-    std::lock_guard<std::mutex> lock(selected->access);
-    if (selected->mode != GPIOMode::PWM) {
+    GPIO &selected = Select(gpio);
+    std::lock_guard<std::mutex> lock(selected.access);
+    if (selected.mode != GPIOMode::PWM) {
         return (bool)(*levelReg & (0x01 << gpio));
     }
     return false;
