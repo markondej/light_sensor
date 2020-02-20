@@ -308,8 +308,8 @@ class GPIOController
         static void PWMCallback(GPIOController *instance);
         static float GetSourceFreq();
 
-        std::mutex pwmAccess;
         GPIO gpio[GPIO_COUNT];
+        std::mutex pwmAccess;
 	std::atomic_uint pwmOutputs, dmaChannel;
         volatile uint32_t *setReg, *clrReg;
         volatile uint32_t *levelReg;
@@ -487,6 +487,7 @@ void GPIOController::PWMCallback(GPIOController *instance)
     cbOffset++;
 
     PWM pwmInfo[GPIO_COUNT];
+    std::memset(pwmInfo, 0, sizeof(PWM) * GPIO_COUNT);
 
     bool cbAvailable;
     uint32_t bitMaskSetClr[2];
