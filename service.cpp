@@ -39,25 +39,24 @@
 #include <fcntl.h>
 #include <iostream>
 #include <cstring>
-#include <atomic>
 #include <thread>
 #include <chrono>
 #include <mutex>
 
-#define PERIPHERALS_PHYS_BASE 0x7E000000
+#define PERIPHERALS_PHYS_BASE 0x7e000000
 #define BCM2835_PERIPHERALS_VIRT_BASE 0x20000000
-#define BCM2838_PERIPHERALS_VIRT_BASE 0xFE000000
+#define BCM2838_PERIPHERALS_VIRT_BASE 0xfe000000
 #define GPIO_FSEL_BASE_OFFSET 0x00200000
-#define GPIO_SET0_OFFSET 0x0020001C
+#define GPIO_SET0_OFFSET 0x0020001c
 #define GPIO_CLR0_OFFSET 0x00200028
 #define GPIO_LEVEL0_OFFSET 0x00200034
 #define GPIO_PUDCTL_OFFSET 0x00200094
 #define DMA0_BASE_OFFSET 0x00007000
-#define DMA15_BASE_OFFSET 0x00E05000
-#define PWMCLK_BASE_OFFSET 0x001010A0
-#define PWM_BASE_OFFSET 0x0020C000
+#define DMA15_BASE_OFFSET 0x00e05000
+#define PWMCLK_BASE_OFFSET 0x001010a0
+#define PWM_BASE_OFFSET 0x0020c000
 
-#define BCM2835_MEM_FLAG 0x0C
+#define BCM2835_MEM_FLAG 0x0c
 #define BCM2838_MEM_FLAG 0x04
 
 #define BCM2835_PLLD_FREQ 500
@@ -178,6 +177,7 @@ class Peripherals
         uint32_t GetPhysicalAddress(volatile void *object) const;
         uint32_t GetVirtualAddress(uint32_t offset) const;
         static uint32_t GetVirtualBaseAddress();
+        static float GetClockFrequency();
     private:
         Peripherals();
         unsigned GetSize();
@@ -225,6 +225,11 @@ uint32_t Peripherals::GetVirtualBaseAddress()
     return (bcm_host_get_peripheral_size() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PERIPHERALS_VIRT_BASE : bcm_host_get_peripheral_address();
 }
 
+float Peripherals::GetClockFrequency()
+{
+    return (GetVirtualBaseAddress() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PLLD_FREQ : BCM2835_PLLD_FREQ;
+}
+
 unsigned Peripherals::GetSize()
 {
     unsigned size = bcm_host_get_peripheral_size();
@@ -265,7 +270,7 @@ AllocatedMemory::AllocatedMemory(unsigned size)
         throw std::runtime_error("Cannot allocate memory (" + std::to_string(size) + "bytes");
     }
     memAddress = mem_lock(mBoxFd, memHandle);
-    memAllocated = mapmem(memAddress & ~0xC0000000, memSize);
+    memAllocated = mapmem(memAddress & ~0xc0000000, memSize);
 }
 
 AllocatedMemory::~AllocatedMemory()
@@ -306,11 +311,9 @@ class GPIOController
         GPIOController();
         GPIO &Select(unsigned gpio);
         static void PWMCallback(GPIOController *instance);
-        static float GetSourceFreq();
 
         GPIO gpio[GPIO_COUNT];
-        std::mutex pwmAccess;
-	std::atomic_uint pwmOutputs, dmaChannel;
+        unsigned pwmOutputs, dmaChannel;
         volatile uint32_t *setReg, *clrReg;
         volatile uint32_t *levelReg;
         volatile GPIOPullUpDownRegisters *pud;
@@ -329,7 +332,7 @@ GPIOController::GPIOController()
     pud = reinterpret_cast<GPIOPullUpDownRegisters *>(peripherals.GetVirtualAddress(GPIO_PUDCTL_OFFSET));
 
     for (unsigned i = 0; i < GPIO_COUNT; i++) {
-	gpio[i].fnselReg = reinterpret_cast<uint32_t *>(peripherals.GetVirtualAddress(GPIO_FSEL_BASE_OFFSET + i * 3 / 30 * sizeof(uint32_t)));
+        gpio[i].fnselReg = reinterpret_cast<uint32_t *>(peripherals.GetVirtualAddress(GPIO_FSEL_BASE_OFFSET + i * 3 / 30 * sizeof(uint32_t)));
         gpio[i].fnselBit = (i * 3) % 30;
         gpio[i].mode = GPIOMode::Out;
         gpio[i].pwmPeriod = 20.f;
@@ -360,11 +363,6 @@ void GPIOController::SetDMAChannel(unsigned channel)
     dmaChannel = channel;
 }
 
-float GPIOController::GetSourceFreq()
-{
-    return (Peripherals::GetVirtualBaseAddress() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PLLD_FREQ : BCM2835_PLLD_FREQ;
-}
-
 GPIO &GPIOController::Select(unsigned gpio)
 {
     if (gpio >= GPIO_COUNT) {
@@ -388,7 +386,7 @@ void GPIOController::SetMode(unsigned gpio, GPIOMode mode)
     {
         std::lock_guard<std::mutex> lock(selected.access);
         pwmDisable = (selected.mode == GPIOMode::PWM) && (mode != GPIOMode::PWM);
-        uint32_t fnsel = *selected.fnselReg & ((0xFFFFFFF8 << selected.fnselBit) | (0xFFFFFFFF >> (32 - selected.fnselBit)));
+        uint32_t fnsel = *selected.fnselReg & ((0xfffffff8 << selected.fnselBit) | (0xffffffff >> (32 - selected.fnselBit)));
         *selected.fnselReg = fnsel | (func << selected.fnselBit);
         selected.mode = mode;
     }
@@ -458,15 +456,15 @@ void GPIOController::PWMCallback(GPIOController *instance)
     Peripherals &peripherals = Peripherals::GetInstance();
 
     volatile ClockRegisters *pwmClk = reinterpret_cast<ClockRegisters *>(peripherals.GetVirtualAddress(PWMCLK_BASE_OFFSET));
-    pwmClk->ctl = (0x5A << 24) | 0x06;
+    pwmClk->ctl = (0x5a << 24) | 0x06;
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
-    pwmClk->div = (0x5A << 24) | static_cast<uint32_t>(GetSourceFreq() * (0x01 << 12) / (PWM_CHANNEL_RANGE * PWM_WRITES_PER_CYCLE * DMA_FREQUENCY / 1000000.f));
-    pwmClk->ctl = (0x5A << 24) | (0x01 << 4) | 0x06;
+    pwmClk->div = (0x5a << 24) | static_cast<uint32_t>(Peripherals::GetClockFrequency() * (0x01 << 12) / (PWM_CHANNEL_RANGE * PWM_WRITES_PER_CYCLE * DMA_FREQUENCY / 1000000.f));
+    pwmClk->ctl = (0x5a << 24) | (0x01 << 4) | 0x06;
 
     volatile PWMRegisters *pwm = reinterpret_cast<PWMRegisters *>(peripherals.GetVirtualAddress(PWM_BASE_OFFSET));
     pwm->ctl = 0x00;
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
-    pwm->status = 0x01FC;
+    pwm->status = 0x01fc;
     pwm->ctl = (0x01 << 6);
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
     pwm->chn1Range = PWM_CHANNEL_RANGE;
@@ -544,7 +542,7 @@ void GPIOController::PWMCallback(GPIOController *instance)
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
     dma->ctlStatus = (0x01 << 2) | (0x01 << 1);
     dma->cbAddress = allocated.GetPhysicalAddress(dmaCb);
-    dma->ctlStatus = (0xFF << 16) | 0x01;
+    dma->ctlStatus = (0xff << 16) | 0x01;
 
     std::this_thread::sleep_for(std::chrono::microseconds(DMA_BUFFER_SIZE * 250000 / DMA_FREQUENCY));
 
