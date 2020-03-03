@@ -39,6 +39,7 @@
 #include <fcntl.h>
 #include <iostream>
 #include <cstring>
+#include <atomic>
 #include <thread>
 #include <chrono>
 #include <mutex>
@@ -313,7 +314,7 @@ class GPIOController
         static void PWMCallback(GPIOController *instance);
 
         GPIO gpio[GPIO_COUNT];
-        unsigned pwmOutputs, dmaChannel;
+        std::atomic_uint pwmOutputs, dmaChannel;
         volatile uint32_t *setReg, *clrReg;
         volatile uint32_t *levelReg;
         volatile GPIOPullUpDownRegisters *pud;
