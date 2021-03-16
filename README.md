@@ -1,28 +1,33 @@
 # rpi_gpio_service
-Simple Raspberry Pi GPIO control service written in C++
+Raspberry Pi GPIO RESTful API written in C++
 
-The aim of this project is to bring up simple service on Raspberry Pi device, which would allow controlling GPIO ports by calling proper net interfaces. The included simple service allows control of PWM's pulse width on GPIO4 pin and may be easly changed allowing other features.
+The aim of this project is to bring up simple RESTful API for Raspberry Pi device which would allow controlling GPIO ports remotely by managing proper REST resources. This services emulates PWM via built-in PWM clock and DMA conttroler enabling multi-channel PWM support.
 
-Simply plug servo to Raspberry Pi's GPIO4, as shown below:
+## RESTful API
+By default service binds HTTP server to port 8080. Input and output structures are JSON-formatted. Available resources are listed below:
 
-![Servo connected to Raspberry Pi](images/rpi_servo.png)
+```
+Resource            |   Methods    |   Request data example              |   Description
+------------------------------------------------------------------------------------------------------------------------------------------------
+/gpio[0-27]         |   PUT, GET   |   {"active":true}                   |   Reads/sets state on given GPIO
+/gpio[0-27]/mode    |   PUT        |   {"select":"output"}               |   Selects current mode for given GPIO (use: "input", "output", "pwm")
+/gpio[0-27]/pwm     |   PUT        |   {"duty-cyle":0.4,"period-time":2} |   Sets PWM parameters (period time in miliseconds)
+/gpio[0-27]/resistor|   PUT        |   {"select":"pull-down"}            |   Pull up/down resistor configuration (use: "pull-up", "pull-down")
+```
 
-Then start service with "sudo ./gpio_service" command in terminal on Raspberry Pi, and finaly connect to service from Your PC eg. with [PuTTY](https://www.putty.org/) (port 5000 is used by default):
+## Features
+* No dependencies except of Broadcom libraries required, works on "light" distros  
+* Works directly on peripherals, no additional drivers needed
+* Multi-channel PWM support, PWM on any available GPIO pin
+* Full GPIO input and output control
+* Pull-Up and Pull-Down resistors control
+* Works on any Raspberry Pi board
 
-![PuTTY configuration](images/putty_conf.png)
-
-Servo control will be possible by typing either "1" or "0" in PuTTY terminal.
-
-Features:
-* works directly on peripherals, no additional drivers needed
-* possible multiple PWM support (multiple servos control), PWM on any available GPIO pin
-* possible input and output control
-* possible Pull-Up and Pull-Down resistors control
-
+## Instalation
 To build and run service on Raspberry Pi clone this repository and use "make" command, eg.:
 ```
 git clone https://github.com/markondej/rpi_gpio_service
 cd rpi_gpio_service
 make
-sudo ./gpio_service
+sudo ./gpio_service -p 80
 ```

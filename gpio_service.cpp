@@ -1,7 +1,7 @@
 /*
-    rpi_gpio_service - Simple Raspberry Pi GPIO control service written in C++
+    rpi_gpio_service - Raspberry Pi GPIO RESTful API written in C++
 
-    Copyright (c) 2020, Marcin Kondej
+    Copyright (c) 2021, Marcin Kondej
     All rights reserved.
 
     See https://github.com/markondej/rpi_gpio_service
@@ -32,17 +32,11 @@
 */
 
 #include "mailbox.h"
+#include "httplib/httplib.h"
+#include "nlohmann/json.hpp"
 #include <bcm_host.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <sys/mman.h>
 #include <fcntl.h>
-#include <iostream>
-#include <cstring>
-#include <atomic>
-#include <thread>
-#include <chrono>
-#include <mutex>
 
 #define PERIPHERALS_PHYS_BASE 0x7e000000
 #define BCM2835_PERIPHERALS_VIRT_BASE 0x20000000
@@ -99,9 +93,8 @@
 #define GPIO26 26
 #define GPIO27 27
 
-#define SERVICE_PORT 5000
-#define SERVICE_MAX_CONNECTIONS 10
-#define RW_BUFFER_SIZE 1024
+#define DEFAULT_SERVICE_PORT 8080
+#define DEFAULT_SERVICE_ADDRESS "0.0.0.0"
 
 struct ClockRegisters {
     uint32_t ctl;
@@ -175,9 +168,9 @@ class Peripherals
         Peripherals(Peripherals &&) = delete;
         Peripherals &operator=(const Peripherals &) = delete;
         static Peripherals &GetInstance();
-        uint32_t GetPhysicalAddress(volatile void *object) const;
-        uint32_t GetVirtualAddress(uint32_t offset) const;
-        static uint32_t GetVirtualBaseAddress();
+        uintptr_t GetPhysicalAddress(volatile void *object) const;
+        uintptr_t GetVirtualAddress(uintptr_t offset) const;
+        static uintptr_t GetVirtualBaseAddress();
         static float GetClockFrequency();
     private:
         Peripherals();
@@ -211,17 +204,17 @@ Peripherals &Peripherals::GetInstance()
     return instance;
 }
 
-uint32_t Peripherals::GetPhysicalAddress(volatile void *object) const
+uintptr_t Peripherals::GetPhysicalAddress(volatile void *object) const
 {
-    return PERIPHERALS_PHYS_BASE + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(peripherals));
+    return PERIPHERALS_PHYS_BASE + (reinterpret_cast<uintptr_t>(object) - reinterpret_cast<uintptr_t>(peripherals));
 }
 
-uint32_t Peripherals::GetVirtualAddress(uint32_t offset) const
+uintptr_t Peripherals::GetVirtualAddress(uintptr_t offset) const
 {
-    return reinterpret_cast<uint32_t>(peripherals) + offset;
+    return reinterpret_cast<uintptr_t>(peripherals) + offset;
 }
 
-uint32_t Peripherals::GetVirtualBaseAddress()
+uintptr_t Peripherals::GetVirtualBaseAddress()
 {
     return (bcm_host_get_peripheral_size() == BCM2838_PERIPHERALS_VIRT_BASE) ? BCM2838_PERIPHERALS_VIRT_BASE : bcm_host_get_peripheral_address();
 }
@@ -248,11 +241,11 @@ class AllocatedMemory
         AllocatedMemory(const AllocatedMemory &) = delete;
         AllocatedMemory(AllocatedMemory &&) = delete;
         AllocatedMemory &operator=(const AllocatedMemory &) = delete;
-        uint32_t GetPhysicalAddress(volatile void *object) const;
-        uint32_t GetAddress() const;
+        uintptr_t GetPhysicalAddress(volatile void *object) const;
+        uintptr_t GetBaseAddress() const;
     private:
         unsigned memSize, memHandle;
-        uint32_t memAddress;
+        uintptr_t memAddress;
         void *memAllocated;
         int mBoxFd;
 };
@@ -284,14 +277,14 @@ AllocatedMemory::~AllocatedMemory()
     memSize = 0;
 }
 
-uint32_t AllocatedMemory::GetPhysicalAddress(volatile void *object) const
+uintptr_t AllocatedMemory::GetPhysicalAddress(volatile void *object) const
 {
-    return (memSize) ? memAddress + (reinterpret_cast<uint32_t>(object) - reinterpret_cast<uint32_t>(memAllocated)) : 0x00000000;
+    return (memSize) ? memAddress + (reinterpret_cast<uintptr_t>(object) - reinterpret_cast<uintptr_t>(memAllocated)) : 0x00000000;
 }
 
-uint32_t AllocatedMemory::GetAddress() const
+uintptr_t AllocatedMemory::GetBaseAddress() const
 {
-    return reinterpret_cast<uint32_t>(memAllocated);
+    return reinterpret_cast<uintptr_t>(memAllocated);
 }
 
 class GPIOController
@@ -306,7 +299,7 @@ class GPIOController
         void SetMode(unsigned gpio, GPIOMode mode);
         void SetResistor(unsigned gpio, GPIOResistor resistor);
         void SetPWM(unsigned gpio, float period, float width);
-        void Set(unsigned gpio, bool high);
+        void Set(unsigned gpio, bool active);
         bool Get(unsigned gpio);
     private:
         GPIOController();
@@ -391,7 +384,7 @@ void GPIOController::SetMode(unsigned gpio, GPIOMode mode)
         *selected.fnselReg = fnsel | (func << selected.fnselBit);
         selected.mode = mode;
     }
-    if (mode == GPIOMode::PWM) {
+    if ((mode == GPIOMode::PWM) && (selected.mode != GPIOMode::PWM)) {
         if (!(pwmOutputs++)) {
             pwmThread = new std::thread(GPIOController::PWMCallback, this);
         }
@@ -430,12 +423,12 @@ void GPIOController::SetPWM(unsigned gpio, float period, float width)
     }
 }
 
-void GPIOController::Set(unsigned gpio, bool high)
+void GPIOController::Set(unsigned gpio, bool active)
 {
     GPIO &selected = Select(gpio);
     std::lock_guard<std::mutex> lock(selected.access);
     if (selected.mode != GPIOMode::PWM) {
-        volatile uint32_t *reg = high ? setReg : clrReg;
+        volatile uint32_t *reg = active ? setReg : clrReg;
         *reg = 0x01 << gpio;
     }
 }
@@ -472,8 +465,8 @@ void GPIOController::PWMCallback(GPIOController *instance)
     pwm->dmaConf = (0x01 << 31) | 0x0707;
     pwm->ctl = (0x01 << 5) | (0x01 << 2) | 0x01;
 
-    volatile DMAControllBlock *dmaCb = reinterpret_cast<DMAControllBlock *>(allocated.GetAddress());
-    volatile uint32_t *bitMask = reinterpret_cast<uint32_t *>(reinterpret_cast<uint32_t>(dmaCb) + DMA_BUFFER_SIZE * sizeof(DMAControllBlock));
+    volatile DMAControllBlock *dmaCb = reinterpret_cast<DMAControllBlock *>(allocated.GetBaseAddress());
+    volatile uint32_t *bitMask = reinterpret_cast<uint32_t *>(reinterpret_cast<uintptr_t>(dmaCb) + DMA_BUFFER_SIZE * sizeof(DMAControllBlock));
 
     unsigned cbOffset = 0;
     std::memset(const_cast<DMAControllBlock *>(dmaCb), 0, sizeof(DMAControllBlock) * DMA_BUFFER_SIZE);
@@ -613,87 +606,130 @@ void GPIOController::PWMCallback(GPIOController *instance)
     pwm->ctl = 0x00;
 }
 
-bool stop = false;
+httplib::Server server;
+
+nlohmann::json parseJsonObject(const std::string &data) {
+    try {
+        nlohmann::json json = nlohmann::json::parse(data);
+        if (!json.is_object()) {
+            throw std::exception();
+        }
+        return json;
+    } catch (...) {
+        throw std::runtime_error("Syntax error, cannot parse object");
+    }
+}
+
+template <class T>
+T loadJsonProperty(const nlohmann::json &json, const char *property)
+{
+    try {
+        if (json.is_object() && json.contains(property) && !json[property].is_null()) {
+            return json[property].get<T>();
+        }
+    } catch (...) {
+    }
+    throw std::runtime_error("'" + std::string(property) + "' value is missing or invalid");
+}
+
+void handleResource(const httplib::Request &request, httplib::Response &response, httplib::Server::Handler handler)
+{
+    try {
+        handler(request, response);
+    } catch (std::exception &catched) {
+        nlohmann::json jsonError;
+        jsonError["error"] = catched.what();
+        if (response.status == -1) {
+            response.status = 500;
+        }
+        response.set_content(jsonError.dump(), "application/json");
+    }
+}
 
 void sigIntHandler(int sigNum)
 {
-    stop = true;
+    if (server.is_running()) {
+        server.stop();
+    }
 }
 
 int main(int argc, char** argv)
 {
-    signal(SIGINT, sigIntHandler);
-    signal(SIGTSTP, sigIntHandler);
-    try {
-        int socketFd, acceptedFd, enable = 1;
-        struct sockaddr_in servAddr;
-
-        char readBuff[RW_BUFFER_SIZE];
-        char sendBuff[RW_BUFFER_SIZE];
-
-        if ((socketFd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) == -1) {
-            throw std::runtime_error("Cannot start service (socket error)");
+    std::string address = DEFAULT_SERVICE_ADDRESS;
+    int opt, port = DEFAULT_SERVICE_PORT;
+    while ((opt = getopt(argc, argv, "a:p:")) != -1) {
+        switch (opt) {
+        case 'a':
+            address = optarg;
+            break;
+        case 'p':
+            port = std::atoi(optarg);
+            break;
         }
-
-        if (setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) == -1) {
-            throw std::runtime_error("Cannot start service (setsockopt error)");
-        }
-
-        std::memset(&servAddr, 0, sizeof(servAddr));
-        servAddr.sin_family = AF_INET;
-        servAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-        servAddr.sin_port = htons(SERVICE_PORT);
-
-        if (bind(socketFd, reinterpret_cast<struct sockaddr*>(&servAddr), sizeof(servAddr)) == -1) {
-            close(socketFd);
-            throw std::runtime_error("Cannot start service (bind error)");
-        }
-
-        if (listen(socketFd, SERVICE_MAX_CONNECTIONS) == -1) {
-            close(socketFd);
-            throw std::runtime_error("Cannot start service (listen error)");
-        }
-
-        GPIOController &gpio = GPIOController::GetInstance();
-        gpio.SetPWM(GPIO4, 20.f, 1.f);
-        gpio.SetMode(GPIO4, GPIOMode::PWM);
-
-        while (!stop) {
-            if ((acceptedFd = accept(socketFd, nullptr, nullptr)) == -1) {
-                std::this_thread::sleep_for(std::chrono::microseconds(1000));
-                continue;
-            }
-            std::memset(readBuff, 0, sizeof(readBuff));
-            std::memset(sendBuff, 0, sizeof(sendBuff));
-            if (read(acceptedFd, readBuff, sizeof(readBuff)) == -1) {
-                close(acceptedFd);
-                continue;
-            }
-            if (strcmp(readBuff, "1") == 0) {
-                sprintf(sendBuff, "OK:1");
-                gpio.SetPWM(GPIO4, 20.f, 2.f);
-                std::cout << "Level set: 1" << std::endl;
-            } else if (strcmp(readBuff, "0") == 0) {
-                sprintf(sendBuff, "OK:0");
-                gpio.SetPWM(GPIO4, 20.f, 1.f);
-                std::cout << "Level set: 0" << std::endl;
-            } else {
-                sprintf(sendBuff, "ERROR:VALUE UNKNOWN");
-                std::cout << "Received unknown value" << std::endl;
-            }
-            write(acceptedFd, sendBuff, strlen(sendBuff));
-            shutdown(acceptedFd, SHUT_RDWR);
-            close(acceptedFd);
-        }
-
-        gpio.SetMode(GPIO4, GPIOMode::Out);
-        gpio.Set(GPIO4, false);
-
-        close(socketFd);
-    } catch (std::exception &error) {
-        std::cout << error.what() << std::endl;
-        return 1;
     }
 
+    signal(SIGINT, sigIntHandler);
+    signal(SIGTSTP, sigIntHandler);
+
+    GPIOController &gpio = GPIOController::GetInstance();
+
+    server.Get("/gpio([0-9]{1,2})", [&](const httplib::Request &request, httplib::Response &response) {
+        handleResource(request, response, [&](const httplib::Request &request, httplib::Response &response) {
+            nlohmann::json json;
+            json["active"] = gpio.Get(std::stoi(request.matches[1]));
+            response.set_content(json.dump(), "application/json");
+        });
+    });
+
+    server.Put("/gpio([0-9]{1,2})", [&](const httplib::Request &request, httplib::Response &response) {
+        handleResource(request, response, [&](const httplib::Request &request, httplib::Response &response) {
+            bool active = loadJsonProperty<bool>(parseJsonObject(request.body), "active");
+            gpio.Set(std::stoi(request.matches[1]), active);
+        });
+    });
+
+    server.Put("/gpio([0-9]{1,2})/mode", [&](const httplib::Request &request, httplib::Response &response) {
+        handleResource(request, response, [&](const httplib::Request &request, httplib::Response &response) {
+            std::string select = loadJsonProperty<std::string>(parseJsonObject(request.body), "select");
+            if (select == "input") {
+                gpio.SetMode(std::stoi(request.matches[1]), GPIOMode::In);
+            } else if (select == "output") {
+                gpio.SetMode(std::stoi(request.matches[1]), GPIOMode::Out);
+            } else if (select == "pwm") {
+                gpio.SetMode(std::stoi(request.matches[1]), GPIOMode::PWM);
+            } else {
+                throw std::runtime_error("Unsupported GPIO mode");
+                response.status = 400;
+            }
+        });
+    });
+
+    server.Put("/gpio([0-9]{1,2})/resistor", [&](const httplib::Request &request, httplib::Response &response) {
+        handleResource(request, response, [&](const httplib::Request &request, httplib::Response &response) {
+            std::string select = loadJsonProperty<std::string>(parseJsonObject(request.body), "select");
+            if (select == "pull-up") {
+                gpio.SetResistor(std::stoi(request.matches[1]), GPIOResistor::PullUp);
+            } else if (select == "pull-down") {
+                gpio.SetResistor(std::stoi(request.matches[1]), GPIOResistor::PullDown);
+            } else {
+                throw std::runtime_error("Unsupported pull up/down resistor type");
+                response.status = 400;
+            }
+        });
+    });
+
+    server.Put("/gpio([0-9]{1,2})/pwm", [&](const httplib::Request &request, httplib::Response &response) {
+        handleResource(request, response, [&](const httplib::Request &request, httplib::Response &response) {
+            nlohmann::json json = parseJsonObject(request.body);
+            float periodTime = loadJsonProperty<float>(json, "period-time"), dutyCycle = loadJsonProperty<float>(json, "duty-cycle");
+            gpio.SetPWM(std::stoi(request.matches[1]), periodTime, periodTime * dutyCycle);
+        });
+    });
+
+    std::cout << "Starting GPIO service " << address << ":" << port << std::endl;
+    if (!server.listen(address.c_str(), port)) {
+        std::cout << "ERROR: Cannot bind service" << std::endl;
+    }
+    
     return 0;
 }
